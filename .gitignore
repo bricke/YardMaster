@@ -1,0 +1,8 @@
+node_modules/
+web/dist/
+internal/httpapi/dist/*
+!internal/httpapi/dist/.keep
+/data/
+/yardmaster
+*.test
+coverage.out
