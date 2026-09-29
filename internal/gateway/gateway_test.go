@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -96,4 +97,72 @@ func TestErrorsUseTheCallersShape(t *testing.T) {
 			t.Errorf("%s: wrong error shape %s", c.path, body)
 		}
 	}
+}
+
+// failingBody sends some bytes, then fails with err, like a connection that breaks
+// part-way through an upload.
+type failingBody struct {
+	sent bool
+	err  error
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, `{"model":"smart","messages":[`), nil
+	}
+	return 0, b.err
+}
+
+func TestBodyReadErrors(t *testing.T) {
+	g := newGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a request whose body couldn't be read was forwarded")
+	})
+	for _, c := range []struct {
+		name      string
+		body      io.Reader
+		status    int
+		ledger    int64
+		errorType string
+	}{
+		{"over the limit", io.LimitReader(zeros{}, maxBody+1), 413, 413, "request_too_large"},
+		{"client went away", &failingBody{err: io.ErrUnexpectedEOF}, 400, 499, "invalid_request_error"},
+		{"broken body", &failingBody{err: errors.New("malformed chunked encoding")}, 400, 400, "invalid_request_error"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/v1/messages", c.body)
+			req.Header.Set("X-Api-Key", "ym_good")
+			rec := httptest.NewRecorder()
+			g.ServeHTTP(rec, req)
+			if rec.Code != c.status {
+				t.Errorf("status %d, want %d", rec.Code, c.status)
+			}
+			var v struct {
+				Error struct{ Type string } `json:"error"`
+			}
+			json.Unmarshal(rec.Body.Bytes(), &v)
+			if v.Error.Type != c.errorType {
+				t.Errorf("error type %q, want %q: %s", v.Error.Type, c.errorType, rec.Body)
+			}
+
+			// Every authenticated request gets a ledger row, including these.
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			g.ledger.Run(ctx) // writes what's queued, then returns
+			rows, err := g.ledger.Recent(t.Context(), usage.Filter{Days: 1, UserName: "alice"}, false, 1)
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("rows %v %v", rows, err)
+			}
+			if r := rows[0]; r.Status == nil || *r.Status != c.ledger || r.Error == "" {
+				t.Errorf("ledger row status %v error %q, want %d", r.Status, r.Error, c.ledger)
+			}
+		})
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
