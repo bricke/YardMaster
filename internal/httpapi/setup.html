@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YardMaster: set up HTTPS</title>
+<style>
+:root{--bg:#f4f6f8;--fg:#1d2733;--muted:#5b6b7c;--card:#fff;--line:#d9e0e7;--accent:#0b6bcb}
+@media (prefers-color-scheme:dark){:root{--bg:#161b22;--fg:#e6edf3;--muted:#9aa7b4;--card:#1f2630;--line:#303a46;--accent:#58a6ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:32px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:20px 24px;margin:16px 0}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:16px;margin:0 0 8px}
+code,pre{font-family:ui-monospace,monospace;font-size:13px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+a.btn{display:inline-block;background:var(--accent);color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;font-weight:600}
+.muted{color:var(--muted)}
+</style></head><body><main>
+<h1>YardMaster uses HTTPS</h1>
+<p class="muted">This page is served over plain HTTP only to help you move to HTTPS.</p>
+{{if .Active}}
+<div class="card"><h2>1. Trust YardMaster's certificate</h2>
+{{if .BuiltinCA}}
+<p>YardMaster signs its own certificate. Install its certificate authority once on each computer:</p>
+<p><a class="btn" href="/ca.crt">Download yardmaster-ca.crt</a></p>
+<p>Check that its SHA-256 fingerprint matches the one in the container log:</p><pre>{{.Fingerprint}}</pre>
+<p><b>Windows:</b> double-click the file → Install Certificate → Local Machine → "Trusted Root Certification Authorities".<br>
+<b>macOS:</b> double-click → Keychain Access → System → open the certificate → Trust → "Always Trust".<br>
+<b>Linux (Debian/Ubuntu):</b> <code>sudo cp yardmaster-ca.crt /usr/local/share/ca-certificates/ &amp;&amp; sudo update-ca-certificates</code><br>
+<b>Linux (Fedora/RHEL):</b> <code>sudo cp yardmaster-ca.crt /etc/pki/ca-trust/source/anchors/ &amp;&amp; sudo update-ca-trust</code><br>
+<b>Firefox</b> keeps its own list: Settings → Privacy &amp; Security → Certificates → View Certificates → Authorities → Import.</p>
+<p>Many coding tools don't read the system list. Point them at the file:</p>
+<pre>export SSL_CERT_FILE=/path/to/yardmaster-ca.crt        # Python (httpx), OpenAI and Anthropic Python SDKs
+export REQUESTS_CA_BUNDLE=/path/to/yardmaster-ca.crt   # Python (requests)
+export NODE_EXTRA_CA_CERTS=/path/to/yardmaster-ca.crt  # Node.js tools, Claude Code</pre>
+{{else}}
+<p>YardMaster uses a certificate your organization provided. If your computer already trusts it, there's nothing to do.</p>
+{{end}}
+</div>
+<div class="card"><h2>2. Open YardMaster</h2>
+<p><a class="btn" href="{{.URL}}">{{.URL}}</a></p>
+<p class="muted">Tools that used <code>http://…:{{.HTTPPort}}</code> must switch to <code>{{.URL}}/v1</code>. Replace any token or password you used over plain HTTP.</p>
+</div>
+{{else}}
+<div class="card"><p>HTTPS isn't on yet. <a href="/">Open YardMaster</a>.</p></div>
+{{end}}
+</main></body></html>
