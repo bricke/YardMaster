@@ -119,31 +119,33 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	e := usage.GatewayEvent{
+		RequestID: newRequestID(), At: start, UserID: caller.UserID, UserName: caller.Username,
+		TokenID: caller.TokenID, TokenName: caller.TokenName,
+	}
+
 	// Read the body once: to enforce the size limit and learn the route (model) name.
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
-		writeError(w, r, http.StatusRequestEntityTooLarge, "request_too_large",
-			fmt.Sprintf("Requests are limited to %d MB.", maxBody>>20))
+		e.Status, e.Error = readError(w, r, err)
+		e.LatencyMS = time.Since(start).Milliseconds()
+		g.ledger.AddGateway(e)
 		return
 	}
 	var peek struct {
 		Model string `json:"model"`
 	}
 	json.Unmarshal(body, &peek)
+	e.Route = peek.Model
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 
-	requestID := newRequestID()
-	label(r, caller.Username, requestID)
+	label(r, caller.Username, e.RequestID)
 
 	rec := &recorder{ResponseWriter: w, status: http.StatusOK}
 	g.forward(rec, r)
 
-	e := usage.GatewayEvent{
-		RequestID: requestID, At: start, UserID: caller.UserID, UserName: caller.Username,
-		TokenID: caller.TokenID, TokenName: caller.TokenName, Route: peek.Model,
-		Status: rec.status, LatencyMS: time.Since(start).Milliseconds(),
-	}
+	e.Status, e.LatencyMS = rec.status, time.Since(start).Milliseconds()
 	if r.Context().Err() != nil {
 		e.Error = "the client disconnected"
 		if rec.status == http.StatusOK {
@@ -153,6 +155,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.Error = http.StatusText(rec.status)
 	}
 	g.ledger.AddGateway(e)
+}
+
+// readError answers a request whose body couldn't be read, and returns the status and
+// error for its ledger row. Only a body over the limit is "too large"; a body cut off
+// part-way means the client went away.
+func readError(w http.ResponseWriter, r *http.Request, err error) (int, string) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, r, http.StatusRequestEntityTooLarge, "request_too_large",
+			fmt.Sprintf("Requests are limited to %d MB.", maxBody>>20))
+		return http.StatusRequestEntityTooLarge, http.StatusText(http.StatusRequestEntityTooLarge)
+	}
+	writeError(w, r, http.StatusBadRequest, "invalid_request_error", "The request body couldn't be read.")
+	if r.Context().Err() != nil || errors.Is(err, io.ErrUnexpectedEOF) {
+		return 499, "the client disconnected"
+	}
+	return http.StatusBadRequest, "the request body couldn't be read"
 }
 
 func (g *Gateway) forward(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +261,8 @@ func anthropicType(code string) string {
 		return "authentication_error"
 	case "not_found":
 		return "not_found_error"
+	case "invalid_request_error":
+		return "invalid_request_error"
 	case "request_too_large":
 		return "request_too_large"
 	default:

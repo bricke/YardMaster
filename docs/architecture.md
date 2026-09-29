@@ -82,8 +82,8 @@ For each request:
    SDK can read them.
 6. **Record its side.** Every authenticated request gets a ledger row from the gateway (user,
    token, route, status, latency); Switchyard's routing record fills in model, tier and tokens.
-   Requests that never produce a routing record (502s, cancelled streams, unknown routes) keep
-   the gateway's side only.
+   Requests that never produce a routing record (502s, cancelled streams, unknown routes, bodies
+   that were too large or cut off) keep the gateway's side only.
 
 ### Usage accounting
 
