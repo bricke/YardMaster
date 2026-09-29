@@ -102,6 +102,49 @@ func TestOriginGuard(t *testing.T) {
 	}
 }
 
+func TestOriginGuardBehindProxy(t *testing.T) {
+	cfg := settings.Settings{Auth: settings.AuthProxy, Proxy: settings.ProxySettings{
+		Secret: "a-long-shared-secret", UserHeader: "X-Remote-User", RoleHeader: "X-Remote-Role",
+		AdminRoles: []string{"admin"},
+	}}
+	_, h := newServer(t, cfg)
+	refused := func(rec *httptest.ResponseRecorder) bool {
+		return rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "didn't come from this site")
+	}
+	// Past the guard, this endpoint answers that tokens come from the proxy.
+	reached := func(rec *httptest.ResponseRecorder) bool {
+		return strings.Contains(rec.Body.String(), "tokens come from that proxy")
+	}
+	// The browser uses the proxy's name; the proxy reaches YardMaster as ym.test.
+	write := func(headers ...string) *httptest.ResponseRecorder {
+		base := []string{"X-Remote-User", "alice", "X-Remote-Role", "admin", "Origin", "https://ai.example.com"}
+		return do(h, "POST", "/api/me/tokens", `{"name":"x"}`, "", append(base, headers...)...)
+	}
+	if rec := write(auth.ProxySecretHeader, "a-long-shared-secret", "X-Forwarded-Host", "ai.example.com"); !reached(rec) {
+		t.Fatalf("write through the trusted proxy refused: %s", rec.Body)
+	}
+	if rec := write(auth.ProxySecretHeader, "a-long-shared-secret", "X-Forwarded-Host", "ai.example.com, other.test"); !reached(rec) {
+		t.Fatalf("first forwarded host not used: %s", rec.Body)
+	}
+	if rec := write(auth.ProxySecretHeader, "a-long-shared-secret", "X-Forwarded-Host", "other.test"); !refused(rec) {
+		t.Fatalf("origin that matches neither host accepted: %d", rec.Code)
+	}
+	// X-Forwarded-Host counts only from the trusted proxy.
+	if rec := write("X-Forwarded-Host", "ai.example.com"); !refused(rec) {
+		t.Fatalf("forwarded host believed without the secret: %d", rec.Code)
+	}
+}
+
+func TestOriginGuardIgnoresForwardedHostWithBuiltinSignIn(t *testing.T) {
+	s, h := newServer(t, settings.Settings{})
+	admin, _ := s.Auth.CreateAdmin(t.Context(), "admin", "correct horse battery")
+	cookie, _ := s.Auth.NewSession(t.Context(), admin.ID)
+	rec := do(h, "POST", "/api/admin/users", `{"username":"eve"}`, cookie, "Origin", "http://evil.test", "X-Forwarded-Host", "evil.test")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forwarded host believed in built-in mode: %d", rec.Code)
+	}
+}
+
 func TestSessionCookieDoesntWorkOnGateway(t *testing.T) {
 	s, h := newServer(t, settings.Settings{})
 	admin, _ := s.Auth.CreateAdmin(t.Context(), "admin", "correct horse battery")

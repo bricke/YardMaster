@@ -24,16 +24,7 @@ var ErrProxyUntrusted = errors.New("request did not come from the trusted proxy"
 // UI requests (allowAddress), when it comes from a proxy address the admin configured.
 // Nothing can grant admin except a role listed in YARDMASTER_PROXY_ADMIN_ROLES.
 func (s *Service) ProxyIdentity(ctx context.Context, r *http.Request, cfg settings.ProxySettings, remote netip.Addr, allowAddress bool) (*User, error) {
-	trusted := HasProxySecret(r, cfg.Secret)
-	if !trusted && allowAddress {
-		for _, p := range cfg.Addresses {
-			if p.Contains(remote.Unmap()) {
-				trusted = true
-				break
-			}
-		}
-	}
-	if !trusted {
+	if !ProxyTrusted(r, cfg, remote, allowAddress) {
 		return nil, ErrProxyUntrusted
 	}
 	name := strings.TrimSpace(r.Header.Get(cfg.UserHeader))
@@ -49,6 +40,22 @@ func (s *Service) ProxyIdentity(ctx context.Context, r *http.Request, cfg settin
 		}
 	}
 	return s.ProxyUser(ctx, name, role)
+}
+
+// ProxyTrusted reports whether r came from the trusted proxy: it carries the shared secret
+// or, when allowAddress is set, it comes from a configured proxy address.
+func ProxyTrusted(r *http.Request, cfg settings.ProxySettings, remote netip.Addr, allowAddress bool) bool {
+	if HasProxySecret(r, cfg.Secret) {
+		return true
+	}
+	if allowAddress {
+		for _, p := range cfg.Addresses {
+			if p.Contains(remote.Unmap()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // HasProxySecret reports whether r carries the shared proxy secret.
