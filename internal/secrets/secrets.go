@@ -4,9 +4,19 @@
 // set from the UI live in one file readable only by the container user (0600). When
 // YARDMASTER_SECRET_KEY is set, that file is encrypted with AES-GCM, so a copy of /data
 // alone reveals nothing. Key values are never returned by the API or logged.
+//
+// The master key is either a base64-encoded 32-byte key, used as is, or a passphrase,
+// stretched with Argon2id and a random salt kept in the file:
+//
+//	ymenc1:<base64 nonce+ciphertext>                 a 32-byte key
+//	ymenc2:<base64 salt>:<base64 nonce+ciphertext>   a passphrase
+//
+// Files written before passphrases used Argon2id are ymenc1 with a SHA-256 of the
+// passphrase as the key; they're read and re-saved as ymenc2 at start.
 package secrets
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -19,7 +29,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
+
+	"golang.org/x/crypto/argon2"
 
 	"yardmaster/internal/fsutil"
 )
@@ -31,7 +44,19 @@ const (
 	Missing = "missing"
 )
 
-const encryptedPrefix = "ymenc1:"
+const (
+	keyPrefix        = "ymenc1:"
+	passphrasePrefix = "ymenc2:"
+	saltSize         = 16
+)
+
+// Argon2id parameters: RFC 9106's second recommended option. The key is derived once, at
+// start.
+const (
+	argonTime    = 3
+	argonMemory  = 64 * 1024 // KiB
+	argonThreads = 4
+)
 
 var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 
@@ -44,6 +69,10 @@ type Store struct {
 	path   string
 	aead   cipher.AEAD // nil when no master key is set
 	lookup func(string) (string, bool)
+	// With a passphrase: the salt of the Argon2id key in aead, and legacy, the SHA-256 key
+	// that reads files from before Argon2id.
+	salt   []byte
+	legacy cipher.AEAD
 }
 
 // Open prepares the store in dir. masterKey may be empty.
@@ -53,18 +82,7 @@ func Open(dir, masterKey string) (*Store, error) {
 	}
 	s := &Store{path: filepath.Join(dir, "provider-keys"), lookup: os.LookupEnv}
 	if masterKey != "" {
-		// A base64-encoded 32-byte value is used as is; anything else (a passphrase) is
-		// stretched with SHA-256.
-		key, err := base64.StdEncoding.DecodeString(masterKey)
-		if err != nil || len(key) != 32 {
-			sum := sha256.Sum256([]byte(masterKey))
-			key = sum[:]
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, err
-		}
-		if s.aead, err = cipher.NewGCM(block); err != nil {
+		if err := s.setMasterKey(masterKey); err != nil {
 			return nil, err
 		}
 	}
@@ -82,6 +100,65 @@ func Open(dir, masterKey string) (*Store, error) {
 		}
 	}
 	return s, nil
+}
+
+// setMasterKey prepares the cipher for a raw key or a passphrase. A passphrase keeps the
+// salt already in the file, so the file stays readable, or gets a new one.
+func (s *Store) setMasterKey(masterKey string) error {
+	if key, err := base64.StdEncoding.DecodeString(masterKey); err == nil && len(key) == 32 {
+		var err error
+		s.aead, err = newAEAD(key)
+		return err
+	}
+	sum := sha256.Sum256([]byte(masterKey))
+	legacy, err := newAEAD(sum[:])
+	if err != nil {
+		return err
+	}
+	s.legacy = legacy
+	raw, err := os.ReadFile(s.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if salt, _, ok := splitPassphraseFile(raw); ok {
+		s.salt = salt
+	} else {
+		s.salt = make([]byte, saltSize)
+		if _, err := rand.Read(s.salt); err != nil {
+			return err
+		}
+	}
+	s.aead, err = newAEAD(argon2.IDKey([]byte(masterKey), s.salt, argonTime, argonMemory, argonThreads, 32))
+	return err
+}
+
+func newAEAD(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+// splitPassphraseFile splits an ymenc2 file into its salt and sealed data.
+func splitPassphraseFile(raw []byte) (salt, sealed []byte, ok bool) {
+	rest, found := strings.CutPrefix(string(raw), passphrasePrefix)
+	if !found {
+		return nil, nil, false
+	}
+	saltText, sealedText, found := strings.Cut(rest, ":")
+	if !found {
+		return nil, nil, false
+	}
+	salt, err := base64.StdEncoding.DecodeString(saltText)
+	if err != nil || len(salt) != saltSize {
+		return nil, nil, false
+	}
+	sealed, err = base64.StdEncoding.DecodeString(sealedText)
+	if err != nil {
+		return nil, nil, false
+	}
+	return salt, sealed, true
 }
 
 // Encrypted reports whether keys are encrypted at rest.
@@ -168,18 +245,47 @@ func (s *Store) load() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) >= len(encryptedPrefix) && string(raw[:len(encryptedPrefix)]) == encryptedPrefix {
-		if s.aead == nil {
-			return nil, errors.New("provider keys are encrypted but YARDMASTER_SECRET_KEY is not set")
-		}
-		data, err := base64.StdEncoding.DecodeString(string(raw[len(encryptedPrefix):]))
-		if err != nil || len(data) < s.aead.NonceSize() {
+	var aead cipher.AEAD
+	var data []byte
+	switch {
+	case strings.HasPrefix(string(raw), passphrasePrefix):
+		salt, sealed, ok := splitPassphraseFile(raw)
+		if !ok {
 			return nil, errors.New("provider keys file is damaged")
 		}
-		nonce, sealed := data[:s.aead.NonceSize()], data[s.aead.NonceSize():]
-		if raw, err = s.aead.Open(nil, nonce, sealed, nil); err != nil {
-			return nil, errors.New("can't decrypt provider keys: YARDMASTER_SECRET_KEY doesn't match the one they were saved with")
+		// Only the passphrase's Argon2id key reads it; a raw key can't.
+		if s.salt != nil && bytes.Equal(salt, s.salt) {
+			aead = s.aead
 		}
+		data = sealed
+	case strings.HasPrefix(string(raw), keyPrefix):
+		aead = s.aead
+		if s.legacy != nil {
+			aead = s.legacy
+		}
+		var err error
+		if data, err = base64.StdEncoding.DecodeString(string(raw[len(keyPrefix):])); err != nil {
+			return nil, errors.New("provider keys file is damaged")
+		}
+	default:
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			return nil, errors.New("provider keys file is damaged")
+		}
+		return keys, nil
+	}
+	if s.aead == nil {
+		return nil, errors.New("provider keys are encrypted but YARDMASTER_SECRET_KEY is not set")
+	}
+	errMismatch := errors.New("can't decrypt provider keys: YARDMASTER_SECRET_KEY doesn't match the one they were saved with")
+	if aead == nil {
+		return nil, errMismatch
+	}
+	if len(data) < aead.NonceSize() {
+		return nil, errors.New("provider keys file is damaged")
+	}
+	raw, err = aead.Open(nil, data[:aead.NonceSize()], data[aead.NonceSize():], nil)
+	if err != nil {
+		return nil, errMismatch
 	}
 	if err := json.Unmarshal(raw, &keys); err != nil {
 		return nil, errors.New("provider keys file is damaged")
@@ -197,8 +303,12 @@ func (s *Store) save(keys map[string]string) error {
 		if _, err := rand.Read(nonce); err != nil {
 			return err
 		}
-		sealed := s.aead.Seal(nonce, nonce, data, nil)
-		data = []byte(encryptedPrefix + base64.StdEncoding.EncodeToString(sealed))
+		sealed := base64.StdEncoding.EncodeToString(s.aead.Seal(nonce, nonce, data, nil))
+		if s.salt != nil {
+			data = []byte(passphrasePrefix + base64.StdEncoding.EncodeToString(s.salt) + ":" + sealed)
+		} else {
+			data = []byte(keyPrefix + sealed)
+		}
 	}
 	return fsutil.WriteFileAtomic(s.path, data, 0o600)
 }

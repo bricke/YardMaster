@@ -152,7 +152,8 @@ login; an admin reset works the same way and keeps their tokens.
   yardmaster.db              SQLite: users, sessions, tokens, usage, monthly totals, prices,
                              audit log, settings
   secrets/provider-keys      UI-set provider keys; 0600; AES-GCM encrypted when
-                             YARDMASTER_SECRET_KEY is set
+                             YARDMASTER_SECRET_KEY is set (a passphrase is stretched
+                             with Argon2id and a salt kept in the file)
   switchyard/
     config.toml              the running deployment
     history/                 the last few applied configs, timestamped

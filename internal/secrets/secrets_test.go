@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +43,7 @@ func TestEncryptedAtRest(t *testing.T) {
 	s, _ := Open(dir, "a passphrase")
 	s.Set("API_KEY", "sk-very-secret")
 	raw, _ := os.ReadFile(filepath.Join(dir, "provider-keys"))
-	if strings.Contains(string(raw), "sk-very-secret") || !strings.HasPrefix(string(raw), encryptedPrefix) {
+	if strings.Contains(string(raw), "sk-very-secret") || !strings.HasPrefix(string(raw), passphrasePrefix) {
 		t.Fatalf("key stored in the clear: %s", raw)
 	}
 	info, _ := os.Stat(filepath.Join(dir, "provider-keys"))
@@ -72,7 +74,82 @@ func TestPlainFileGetsEncryptedWhenKeyAdded(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "provider-keys"))
-	if !strings.HasPrefix(string(raw), encryptedPrefix) {
+	if !strings.HasPrefix(string(raw), passphrasePrefix) {
 		t.Fatal("existing keys weren't encrypted when a master key was set")
+	}
+}
+
+func TestPassphraseUsesArgon2idWithASalt(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for _, dir := range []string{a, b} {
+		s, _ := Open(dir, "a passphrase")
+		s.Set("API_KEY", "sk-1")
+	}
+	ra, _ := os.ReadFile(filepath.Join(a, "provider-keys"))
+	rb, _ := os.ReadFile(filepath.Join(b, "provider-keys"))
+	sa, _, okA := splitPassphraseFile(ra)
+	sb, _, okB := splitPassphraseFile(rb)
+	if !okA || !okB || string(sa) == string(sb) {
+		t.Fatalf("want ymenc2 files with different salts: %q, %q", ra[:40], rb[:40])
+	}
+	// Saving again keeps the salt, so the file stays readable after a restart.
+	s, _ := Open(a, "a passphrase")
+	s.Set("OTHER_KEY", "sk-2")
+	ra2, _ := os.ReadFile(filepath.Join(a, "provider-keys"))
+	if sa2, _, _ := splitPassphraseFile(ra2); string(sa2) != string(sa) {
+		t.Fatal("the salt changed on save")
+	}
+}
+
+func TestSHA256FileIsReSavedWithArgon2id(t *testing.T) {
+	dir := t.TempDir()
+	// A file written before Argon2id: ymenc1, with a SHA-256 of the passphrase as the key.
+	sum := sha256.Sum256([]byte("old passphrase"))
+	aead, _ := newAEAD(sum[:])
+	nonce := make([]byte, aead.NonceSize())
+	sealed := aead.Seal(nonce, nonce, []byte(`{"API_KEY":"sk-old"}`), nil)
+	os.WriteFile(filepath.Join(dir, "provider-keys"), []byte(keyPrefix+base64.StdEncoding.EncodeToString(sealed)), 0o600)
+
+	if _, err := Open(dir, "wrong passphrase"); err == nil {
+		t.Fatal("opened with the wrong passphrase")
+	}
+	s, err := Open(dir, "old passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env, _ := s.Env([]string{"API_KEY"}); len(env) != 1 || env[0] != "API_KEY=sk-old" {
+		t.Fatalf("env %v", env)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "provider-keys"))
+	if !strings.HasPrefix(string(raw), passphrasePrefix) {
+		t.Fatalf("not re-saved as ymenc2: %q", raw[:10])
+	}
+	again, err := Open(dir, "old passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env, _ := again.Env([]string{"API_KEY"}); len(env) != 1 {
+		t.Fatalf("after the re-save: %v", env)
+	}
+}
+
+func TestRawKeyKeepsItsFormat(t *testing.T) {
+	dir := t.TempDir()
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	s, _ := Open(dir, key)
+	s.Set("API_KEY", "sk-raw")
+	raw, _ := os.ReadFile(filepath.Join(dir, "provider-keys"))
+	if !strings.HasPrefix(string(raw), keyPrefix) {
+		t.Fatalf("a 32-byte key should write ymenc1: %q", raw[:10])
+	}
+	if _, err := Open(dir, key); err != nil {
+		t.Fatal(err)
+	}
+	// A passphrase file can't be read with a raw key, even one that happens to decode.
+	pdir := t.TempDir()
+	p, _ := Open(pdir, "a passphrase")
+	p.Set("API_KEY", "sk-1")
+	if _, err := Open(pdir, key); err == nil || !strings.Contains(err.Error(), "doesn't match") {
+		t.Fatalf("raw key on a passphrase file: %v", err)
 	}
 }
