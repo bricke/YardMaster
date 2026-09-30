@@ -9,17 +9,23 @@ import (
 // Login throttling: at most 5 failures per account and 20 per client IP in a
 // 15-minute window. Kept in memory: a restart clears it, which is acceptable because a
 // restart is slow compared with the attempts it would allow.
+//
+// Memory stays proportional to recent failures: expired entries are swept regularly, and
+// a name that can't be a username counts against the IP only. Unknown but valid names are
+// tracked like real ones, so the throttle doesn't reveal which accounts exist.
 const (
 	throttleWindow     = 15 * time.Minute
 	maxFailuresAccount = 5
 	maxFailuresIP      = 20
+	sweepEvery         = time.Minute
 )
 
 type Throttle struct {
-	mu       sync.Mutex
-	accounts map[string][]time.Time
-	ips      map[string][]time.Time
-	now      func() time.Time
+	mu        sync.Mutex
+	accounts  map[string][]time.Time
+	ips       map[string][]time.Time
+	lastSweep time.Time
+	now       func() time.Time
 }
 
 func NewThrottle() *Throttle {
@@ -30,9 +36,10 @@ func NewThrottle() *Throttle {
 func (t *Throttle) Allow(account, ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	account = strings.ToLower(account)
-	return len(t.recent(t.accounts, account)) < maxFailuresAccount &&
-		len(t.recent(t.ips, ip)) < maxFailuresIP
+	if key, ok := accountKey(account); ok && len(t.recent(t.accounts, key)) >= maxFailuresAccount {
+		return false
+	}
+	return len(t.recent(t.ips, ip)) < maxFailuresIP
 }
 
 // Fail records a failed attempt.
@@ -40,8 +47,13 @@ func (t *Throttle) Fail(account, ip string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
-	account = strings.ToLower(account)
-	t.accounts[account] = append(t.recent(t.accounts, account), now)
+	if now.Sub(t.lastSweep) >= sweepEvery {
+		t.sweep()
+		t.lastSweep = now
+	}
+	if key, ok := accountKey(account); ok {
+		t.accounts[key] = append(t.recent(t.accounts, key), now)
+	}
 	t.ips[ip] = append(t.recent(t.ips, ip), now)
 }
 
@@ -49,7 +61,28 @@ func (t *Throttle) Fail(account, ip string) {
 func (t *Throttle) Reset(account string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.accounts, strings.ToLower(account))
+	if key, ok := accountKey(account); ok {
+		delete(t.accounts, key)
+	}
+}
+
+// accountKey is the key an account's failures are kept under, or false for a name that
+// can't be a username.
+func accountKey(name string) (string, bool) {
+	if !ValidUsername(name) {
+		return "", false
+	}
+	return strings.ToLower(name), true
+}
+
+// sweep drops every entry whose failures have all expired.
+func (t *Throttle) sweep() {
+	for key := range t.accounts {
+		t.recent(t.accounts, key)
+	}
+	for key := range t.ips {
+		t.recent(t.ips, key)
+	}
 }
 
 // recent returns the failures still inside the window, dropping older ones.
