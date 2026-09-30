@@ -65,7 +65,11 @@ func (s *Server) publicOrigin(r *http.Request) string {
 	if s.isHTTPS(r) {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host
+	host := r.Host
+	if fwd := s.forwardedHost(r); fwd != "" {
+		host = fwd
+	}
+	return scheme + "://" + host
 }
 
 func hostOnly(hostport string) string {

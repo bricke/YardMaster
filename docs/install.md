@@ -85,10 +85,13 @@ the architecture.
 
 If the proxy reaches YardMaster under a different name than the one in the browser (for example
 `yardmaster:8080` on the Docker network while people open `https://ai.example.com`), it must send
-the browser's host in `X-Forwarded-Host`. Otherwise every change made in the UI is refused with
-"it didn't come from this site". Caddy and Traefik send it by default; with nginx, add
-`proxy_set_header X-Forwarded-Host $http_host;` (`$http_host` keeps the port, which the check
-needs). YardMaster believes this header only from the trusted proxy.
+the browser's host in `X-Forwarded-Host`, and `X-Forwarded-Proto: https` when it serves HTTPS.
+Otherwise every change made in the UI is refused with "it didn't come from this site", and
+**Connect an agent** shows the internal address instead of the one your coworkers use. Caddy and
+Traefik send both by default; with nginx, add `proxy_set_header X-Forwarded-Host $http_host;`
+(`$http_host` keeps the port, which the check needs) and
+`proxy_set_header X-Forwarded-Proto $scheme;`. YardMaster believes these headers only from the
+trusted proxy.
 
 ## Configuration
 
