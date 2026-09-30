@@ -1,4 +1,4 @@
-![YardMaster: a shared LLM gateway for the team](docs/images/social-preview.png)
+![YardMaster: a self-hosted LLM gateway for your team](docs/images/social-preview.png)
 
 [![CI](https://github.com/bricke/YardMaster/actions/workflows/ci.yml/badge.svg)](https://github.com/bricke/YardMaster/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
