@@ -24,6 +24,8 @@
   let formats = $state([])
   let openAIEfforts = $state([])
   let anthropicEfforts = $state([])
+  // Where YardMaster's Jev judge adapter listens (package jev).
+  let typesafeURL = $state('')
   let keys = $state({})
   let encrypted = $state(false)
   let error = $state('')
@@ -67,6 +69,7 @@
       formats = d.formats
       openAIEfforts = d.openai_efforts
       anthropicEfforts = d.anthropic_efforts
+      typesafeURL = d.typesafe_base_url
       loaded = true
       await loadKeys()
     } catch (e) {
@@ -98,7 +101,9 @@
 
   // ---- providers ----
   function addClient(preset) {
-    const c = { ...presets[preset] }
+    const c = preset === 'typesafe'
+      ? { name: 'typesafe', format: 'openai_chat', base_url: typesafeURL, auth: 'key', key_env: 'TYPESAFE_API_KEY' }
+      : { ...presets[preset] }
     if (c.name) {
       let name = c.name
       let i = 2
@@ -189,9 +194,21 @@
       return ''
     }
   }
+  // TypeSafe's Jev, reached through YardMaster's adapter on loopback (deploy.Client.IsJev).
+  function isJev(c) {
+    try {
+      const u = new URL(c?.base_url)
+      return ['127.0.0.1', 'localhost'].includes(u.hostname) && u.pathname.replace(/\/$/, '') === '/typesafe/v1'
+    } catch {
+      return false
+    }
+  }
+  const jevTargets = $derived(new Set(model.targets.filter((t) => isJev(model.clients.find((c) => c.name === t.client))).map((t) => t.name)))
+
   function kindOf(t) {
     const c = model.clients.find((x) => x.name === t.client)
     if (!c) return ''
+    if (isJev(c)) return 'jev'
     if (c.format === 'anthropic_messages') return 'anthropic'
     return isOpenAI(c) ? 'openai' : 'selfhosted'
   }
@@ -212,9 +229,9 @@
   // With one model, a passthrough route to it; with more, "smart" with the auto strategy.
   function addRoute() {
     const n = model.routes.length + 1
-    const single = targetNames.length === 1
-    const id = single ? targetNames[0] : n === 1 ? 'smart' : `route${n}`
-    const r = { id, type: single ? 'passthrough' : 'auto', target: single ? targetNames[0] : '', targets: [], weights: [], base_threshold: 0.5 }
+    const single = answerNames.length === 1
+    const id = single ? answerNames[0] : n === 1 ? 'smart' : `route${n}`
+    const r = { id, type: single ? 'passthrough' : 'auto', target: single ? answerNames[0] : '', targets: [], weights: [], base_threshold: 0.5 }
     r.name = r.suggested_name = routeKey(id, n)
     model.routes.push(r)
     revealNew()
@@ -229,6 +246,8 @@
     if (!r.name || r.name === r.suggested_name) r.name = r.suggested_name = routeKey(r.id, model.routes.indexOf(r) + 1)
   }
   const targetNames = $derived(model.targets.map((t) => t.name).filter(Boolean))
+  // Models that can answer requests: all but Jev.
+  const answerNames = $derived(targetNames.filter((n) => !jevTargets.has(n)))
 
   function toggleTarget(r, name) {
     const i = r.targets.indexOf(name)
@@ -297,6 +316,7 @@
           <option value="ollama">Ollama (local)</option>
           <option value="vllm">vLLM (local)</option>
           <option value="custom">Other OpenAI-compatible</option>
+          <option value="typesafe">TypeSafe Jev (judge only)</option>
         </select>
       {/snippet}
       <div class="stack">
@@ -305,6 +325,9 @@
             <div class="fields">
               <label class="field"><span class="label">Name</span><input bind:value={c.name} placeholder="e.g. company-gateway" required />
                 <span class="hint">Your label for this provider.</span></label>
+              {#if isJev(c)}
+                <p class="field wide muted small">TypeSafe's Jev answers no requests: it can only be the judge of a Classifier route. YardMaster's built-in adapter connects it to the router, so there's no URL to set.</p>
+              {:else}
               <label class="field"><span class="label">API format</span>
                 <select bind:value={c.format}>{#each formats as f}<option>{f}</option>{/each}</select>
                 {#if hostOf(c.base_url).endsWith('openai.com') && c.format === 'openai_chat'}<span class="hint warn">OpenAI's GPT-6 models only use tools together with reasoning through openai_responses.</span>{/if}
@@ -314,6 +337,7 @@
               <label class="field"><span class="label">API key</span>
                 <select bind:value={c.auth}><option value="key">Needs an API key</option><option value="none">No key (local server)</option></select>
               </label>
+              {/if}
               <label class="field"><span class="label">Timeout (seconds)</span>
                 <input type="number" min="1" step="1" placeholder="No limit"
                   bind:value={() => (c.timeout_ms ? c.timeout_ms / 1000 : null), (v) => (c.timeout_ms = v > 0 ? Math.round(v * 1000) : undefined)} />
@@ -360,13 +384,17 @@
               <label class="field"><span class="label">Name</span><input bind:value={t.name} placeholder="e.g. qwen" data-first />
                 <span class="hint">Your short label for this model.</span></label>
               <label class="field"><span class="label">Served by</span>
-                <select bind:value={t.client} onchange={() => clearReasoning(t)}>{#each model.clients as c}<option value={c.name}>{c.name || '(unnamed provider)'}</option>{/each}</select>
+                <select bind:value={t.client} onchange={() => { clearReasoning(t); if (kindOf(t) === 'jev' && !t.model_id) t.model_id = 'jev-latest' }}>{#each model.clients as c}<option value={c.name}>{c.name || '(unnamed provider)'}</option>{/each}</select>
                 <span class="hint">The provider from step 1 that hosts it.</span>
               </label>
               <label class="field wide"><span class="label">Model ID</span><input bind:value={t.model_id} placeholder="e.g. qwen3.8-27b" />
                 <span class="hint">Exactly as your provider names it; this is what's sent to them.</span></label>
               {@render reasoning(t)}
-              <label class="field full"><span class="label">System prompt (optional)</span><input bind:value={t.system_prompt} placeholder="Added before the caller's instructions when this model answers" /></label>
+              {#if kindOf(t) === 'jev'}
+                <p class="field full muted small">Use <code>jev-latest</code>, or a versioned ID such as <code>jev-1.13.0</code> to keep thresholds stable across releases. Jev can only be a judge.</p>
+              {:else}
+                <label class="field full"><span class="label">System prompt (optional)</span><input bind:value={t.system_prompt} placeholder="Added before the caller's instructions when this model answers" /></label>
+              {/if}
             </div>
             <div class="row"><span class="spacer"></span><button class="btn small danger" onclick={() => removeAt(model.targets, i)}>Remove</button></div>
           </div>
@@ -400,7 +428,7 @@
               {:else if r.type === 'llm_classifier'}
                 {@render pickTarget(r, 'strong_target', 'Strong model')}
                 {@render pickTarget(r, 'weak_target', 'Weak model')}
-                {@render pickTarget(r, 'classifier_target', 'Judge model')}
+                {@render pickTarget(r, 'classifier_target', 'Judge model', true)}
                 <label class="field"><span class="label">Threshold (0–1)</span>
                   <input type="number" step="0.05" min="0" max="1" bind:value={r.base_threshold} />
                   <span class="hint">Higher sends less traffic to the weak model.</span>
@@ -418,7 +446,7 @@
                 <div class="field full">
                   <span class="label">Models and weights</span>
                   <div class="stack">
-                    {#each targetNames as name}
+                    {#each answerNames as name}
                       {@const idx = r.targets.indexOf(name)}
                       <div class="row">
                         <label class="row"><input type="checkbox" checked={idx >= 0} onchange={() => toggleTarget(r, name)} /> <code>{name}</code></label>
@@ -432,9 +460,9 @@
             <div class="row"><span class="spacer"></span><button class="btn small danger" onclick={() => removeAt(model.routes, i)}>Remove</button></div>
           </div>
         {:else}
-          {#if targetNames.length === 1}
-            <div class="row"><button class="btn primary" onclick={addRoute}>Add a route to {targetNames[0]}</button><span class="muted">Every request goes to that model.</span></div>
-          {:else if targetNames.length > 1}
+          {#if answerNames.length === 1}
+            <div class="row"><button class="btn primary" onclick={addRoute}>Add a route to {answerNames[0]}</button><span class="muted">Every request goes to that model.</span></div>
+          {:else if answerNames.length > 1}
             <div class="row"><button class="btn primary" onclick={addRoute}>Add a "smart" route</button><span class="muted">The auto strategy: efficient model first, the capable one when needed.</span></div>
           {:else}
             <p class="muted">Add models in step 2 first.</p>
@@ -513,12 +541,13 @@
   {/if}
 {/snippet}
 
-{#snippet pickTarget(r, field, label)}
+{#snippet pickTarget(r, field, label, judge = false)}
   <label class="field"><span class="label">{label}</span>
     <select bind:value={r[field]}>
       <option value="">Choose…</option>
-      {#each targetNames as n}<option>{n}</option>{/each}
+      {#each targetNames.filter((n) => judge || !jevTargets.has(n)) as n}<option>{n}</option>{/each}
     </select>
+    {#if judge && jevTargets.has(r[field])}<span class="hint">Jev decides in about 0.1 s. Its forecasts are calibrated: start the threshold at 0.5.</span>{/if}
   </label>
 {/snippet}
 

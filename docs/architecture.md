@@ -47,6 +47,7 @@ flowchart LR
 | 8080 | UI, admin API, gateway | Setup page only: CA download, trust instructions, name check, health. Gateway and API paths get an error, never a redirect | UI, admin API, gateway (reached only by the front proxy) |
 | 8443 | not bound | UI, admin API, gateway | not bound |
 | 4000 | inside the container only | inside the container only | inside the container only |
+| 4001 | loopback only: the [Jev judge adapter](#jev-judge-adapter) | same | same |
 
 Switching between plain HTTP and HTTPS rebinds the listening sockets in the same process; it
 doesn't restart `yardmaster` or `switchyard-server`.
@@ -130,6 +131,28 @@ The supervisor also restarts `switchyard-server` if it crashes, with backoff, an
 lines of its stderr on the Health page. Replacing a provider key uses the same flow, since keys only
 reach Switchyard at start.
 
+### Jev judge adapter
+
+Switchyard's judge speaks chat formats; TypeSafe's Jev answers typed questions about a state
+(`POST /v1/systemone`). `internal/jev` bridges them on `127.0.0.1:4001/typesafe/v1`, which the
+config names as an ordinary `openai_chat` provider:
+
+1. Switchyard sends the capability classifier's judge request: its prompt and capability card as
+   the system message, the opening task and latest user follow-up as user messages, and the
+   `CapabilityClassifierDecision` schema. Other requests and judge modes get a 400.
+2. The adapter makes one Jev call with the two user messages as named state fields and two
+   questions: a Noul, "will the efficient model complete the task correctly?", and a Choice over
+   the card's rules (read from the prompt, so a custom prompt's card is honored) plus "none".
+   Messages over 30,000 characters keep their head and tail; if Jev still finds the request too
+   long, it's retried once with half.
+3. It answers with the verdict JSON: `p_solve` from the Noul, `primary_rule` from the Choice, and
+   `capability_boundary` from that rule. Jev's input tokens are reported as prompt tokens, so judge
+   calls show in usage and cost like any other judge.
+
+The TypeSafe key is the provider key Switchyard sends as the bearer token; the adapter passes it
+on and keeps nothing. TypeSafe's 429 and 5xx keep their retry classes. The wizard only lets a Jev
+model be a judge (`deploy.Client.IsJev`).
+
 ## Identity
 
 | Mode | Who signs in | How |
@@ -179,6 +202,8 @@ Nothing in `/data` ever holds a prompt or a response. Backing up YardMaster mean
 | `YARDMASTER_SHUTDOWN_TIMEOUT` | Drain window when the router restarts (default `30s`) |
 | `YARDMASTER_USAGE_RETENTION_DAYS`, `YARDMASTER_AUDIT_RETENTION_DAYS` | Retention (defaults 90 and 365) |
 | `YARDMASTER_SWITCHYARD_BIN`, `YARDMASTER_SWITCHYARD_PORT` | For development outside the image |
+| `YARDMASTER_JUDGE_PORT` | Loopback port of the Jev judge adapter (default 4001) |
+| `YARDMASTER_TYPESAFE_URL` | Jev's endpoint (default `https://api.typesafe.ai/v1/systemone`) |
 | Provider key variables, e.g. `OPENROUTER_API_KEY` | Take precedence over UI-set keys and show as read-only |
 
 ## Code layout
@@ -195,6 +220,7 @@ internal/
   deploy/              the deployment model, TOML generation, dry-run, apply, history
   supervisor/          the switchyard-server process: start, stop, health, crash restarts
   gateway/             the /v1 proxy
+  jev/                 the adapter that lets TypeSafe's Jev be a capability judge
   usage/               routing-log ingester, ledger writes, aggregates, prices, retention
   metrics/             /metrics and /v1/stats scraping, in-memory buffers
   tlsca/               CA and certificates, renewal, name check, socket rebinding

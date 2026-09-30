@@ -202,4 +202,5 @@ export const judgeAdvice = [
   'Reliable. If the judge’s provider fails or refuses a request, every route using that judge fails too. Test a new judge in the Playground before applying it to all routes.',
   'Calibrate the threshold per judge. Different judges rate the same task differently: with Ministral as judge, a hard Rust design question went to the weak model at threshold 0.4, while GPT-6 Luna sent it to the strong model.',
   'Cheap per decision, not just per token. Judge tokens show up as “Routing tokens” on the Usage page.',
+  'For the Classifier (capability), TypeSafe’s Jev is built for this: it returns a calibrated probability instead of writing a verdict. In our tests it decided in about 0.1 s for under a thousand input tokens, and separated easy from hard tasks at any threshold from 0.4 to 0.7. Add it as the “TypeSafe Jev” provider; it can only be a judge.',
 ]

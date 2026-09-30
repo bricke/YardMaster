@@ -31,6 +31,7 @@ import (
 	"yardmaster/internal/auth"
 	"yardmaster/internal/deploy"
 	"yardmaster/internal/httpapi"
+	"yardmaster/internal/jev"
 	"yardmaster/internal/metrics"
 	"yardmaster/internal/secrets"
 	"yardmaster/internal/settings"
@@ -171,6 +172,17 @@ func serve() error {
 			TLSConfig:         &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12},
 		},
 	}
+	// The Jev judge adapter: loopback only, since only switchyard-server calls it.
+	judge := &http.Server{
+		Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.JudgePort)),
+		Handler:           jev.New(cfg.TypeSafeURL),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		if err := judge.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Jev judge adapter stopped", "addr", judge.Addr, "err", err)
+		}
+	}()
 	go func() {
 		slog.Info("YardMaster listening", "http", plain.Addr, "version", version)
 		if err := plain.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -202,6 +214,8 @@ func serve() error {
 	plain.Shutdown(shutdownCtx)
 	secure.shutdown(shutdownCtx)
 	wg.Wait()
+	// After the router has stopped: its draining requests may still need a judge.
+	judge.Shutdown(shutdownCtx)
 	return nil
 }
 

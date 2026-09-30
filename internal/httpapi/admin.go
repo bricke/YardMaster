@@ -16,6 +16,7 @@ import (
 	"yardmaster/internal/audit"
 	"yardmaster/internal/auth"
 	"yardmaster/internal/deploy"
+	"yardmaster/internal/jev"
 	"yardmaster/internal/secrets"
 	"yardmaster/internal/usage"
 )
@@ -198,6 +199,7 @@ func (s *Server) handleDeployment(w http.ResponseWriter, r *http.Request, u *aut
 	writeJSON(w, http.StatusOK, map[string]any{
 		"model": model, "source": source, "toml": current, "formats": deploy.Formats,
 		"openai_efforts": deploy.OpenAIEfforts, "anthropic_efforts": deploy.AnthropicEfforts,
+		"typesafe_base_url": jev.BaseURL(s.Settings.JudgePort),
 	})
 }
 

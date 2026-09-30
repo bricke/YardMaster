@@ -189,3 +189,38 @@ func TestHistoryKeepsTheNewest(t *testing.T) {
 		t.Errorf("oldest kept is %s; the two oldest should be gone", h[len(h)-1].ID)
 	}
 }
+
+func TestJevOnlyJudges(t *testing.T) {
+	d := sample()
+	d.Clients = append(d.Clients, Client{Name: "typesafe", Format: "openai_chat", BaseURL: "http://127.0.0.1:4001/typesafe/v1", Auth: AuthKey, KeyEnv: "TYPESAFE_API_KEY"})
+	d.Targets = append(d.Targets, Target{Name: "jev", ModelID: "jev-latest", Client: "typesafe"})
+	d.Routes[1].ClassifierTarget = "jev"
+	if err := d.Validate(); err != nil {
+		t.Fatalf("Jev as a judge refused: %v", err)
+	}
+	d.Routes[0].EfficientTarget = "jev"
+	d.Routes = append(d.Routes, Route{Name: "p", ID: "direct", Type: RoutePassthrough, Target: "jev"})
+	d.Clients[1].Format = "anthropic_messages"
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("Jev accepted as an answering model")
+	}
+	for _, want := range []string{`route "a": efficient model "jev" is TypeSafe's Jev`, `route "p": model "jev" is TypeSafe's Jev`, `provider "typesafe": TypeSafe's Jev`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestIsJev(t *testing.T) {
+	for url, want := range map[string]bool{
+		"http://127.0.0.1:4001/typesafe/v1":  true,
+		"http://localhost:4001/typesafe/v1/": true,
+		"https://api.typesafe.ai/v1":         false,
+		"http://10.0.0.5:4001/typesafe/v1":   false,
+	} {
+		if got := (Client{BaseURL: url}).IsJev(); got != want {
+			t.Errorf("IsJev(%s) = %v", url, got)
+		}
+	}
+}
