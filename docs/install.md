@@ -28,7 +28,9 @@ docker logs yardmaster        # shows a one-time setup code
 ```
 
 Store the `YARDMASTER_SECRET_KEY` value somewhere safe. It encrypts the provider keys you enter;
-if you lose it, they can't be read back.
+if you lose it, they can't be read back. A random key like the one above is best. A passphrase
+also works: YardMaster stretches it with Argon2id, which makes guessing slow, but a short or
+common one is still weak.
 
 ## Without Docker
 
