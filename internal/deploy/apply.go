@@ -1,12 +1,13 @@
 package deploy
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -265,15 +266,14 @@ type HistoryEntry struct {
 
 // History lists applied configs, newest first.
 func (a *Applier) History() ([]HistoryEntry, error) {
-	names, err := filepath.Glob(filepath.Join(a.historyDir, "*.toml"))
+	names, err := a.historyFiles()
 	if err != nil {
 		return nil, err
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	out := []HistoryEntry{}
-	for _, n := range names {
+	for _, n := range slices.Backward(names) {
 		id := strings.TrimSuffix(filepath.Base(n), ".toml")
-		ts, _ := strconv.ParseInt(strings.SplitN(id, "-", 2)[0], 10, 64)
+		ts, _ := historyTime(id)
 		out = append(out, HistoryEntry{ID: id, AppliedAt: ts})
 	}
 	return out, nil
@@ -294,14 +294,39 @@ func (a *Applier) HistoryConfig(id string) (string, error) {
 }
 
 func (a *Applier) saveHistory(config string) {
-	id := fmt.Sprintf("%d-%d", time.Now().Unix(), time.Now().Nanosecond()%1000)
+	now := time.Now()
+	id := fmt.Sprintf("%d-%09d", now.Unix(), now.Nanosecond())
 	writeFile(filepath.Join(a.historyDir, id+".toml"), config)
-	names, _ := filepath.Glob(filepath.Join(a.historyDir, "*.toml"))
-	sort.Strings(names)
+	names, _ := a.historyFiles()
 	for len(names) > historyKeep {
 		os.Remove(names[0])
 		names = names[1:]
 	}
+}
+
+// historyFiles lists the history files, oldest first.
+func (a *Applier) historyFiles() ([]string, error) {
+	names, err := filepath.Glob(filepath.Join(a.historyDir, "*.toml"))
+	if err != nil {
+		return nil, err
+	}
+	// Numerically, not as strings: names written before the fraction was zero-padded
+	// ("<seconds>-<ns % 1000>") don't sort as text.
+	key := func(n string) (int64, int64) { return historyTime(strings.TrimSuffix(filepath.Base(n), ".toml")) }
+	slices.SortFunc(names, func(x, y string) int {
+		xs, xf := key(x)
+		ys, yf := key(y)
+		return cmp.Or(cmp.Compare(xs, ys), cmp.Compare(xf, yf))
+	})
+	return names, nil
+}
+
+// historyTime splits a history ID, "<unix seconds>-<fraction>", into its two numbers.
+func historyTime(id string) (sec, frac int64) {
+	s, f, _ := strings.Cut(id, "-")
+	sec, _ = strconv.ParseInt(s, 10, 64)
+	frac, _ = strconv.ParseInt(f, 10, 64)
+	return sec, frac
 }
 
 func writeFile(path, content string) error {

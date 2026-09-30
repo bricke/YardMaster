@@ -1,6 +1,9 @@
 package deploy
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,5 +142,50 @@ func TestReasoningControls(t *testing.T) {
 	err := d.Validate()
 	if err == nil || !strings.Contains(err.Error(), "for Claude use effort") || !strings.Contains(err.Error(), "for Anthropic providers") {
 		t.Fatalf("mismatched controls accepted: %v", err)
+	}
+}
+
+func TestHistoryOrder(t *testing.T) {
+	a := &Applier{historyDir: t.TempDir()}
+	// Names from before the fraction was zero-padded sort by number, not as text.
+	for _, id := range []string{"1790000000-42", "1790000000-7", "1790000001-3"} {
+		os.WriteFile(filepath.Join(a.historyDir, id+".toml"), []byte(id), 0o600)
+	}
+	h, err := a.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, e := range h {
+		ids = append(ids, e.ID)
+	}
+	if got := strings.Join(ids, " "); got != "1790000001-3 1790000000-42 1790000000-7" {
+		t.Errorf("newest first: %s", got)
+	}
+	if h[0].AppliedAt != 1790000001 {
+		t.Errorf("applied at %d", h[0].AppliedAt)
+	}
+}
+
+func TestHistoryKeepsTheNewest(t *testing.T) {
+	a := &Applier{historyDir: t.TempDir()}
+	for i := range historyKeep {
+		id := fmt.Sprintf("1790000000-%d", i*100)
+		os.WriteFile(filepath.Join(a.historyDir, id+".toml"), []byte(id), 0o600)
+	}
+	// Applies within the same second, as when a config is applied and a key replaced.
+	a.saveHistory("second newest")
+	a.saveHistory("newest")
+	h, _ := a.History()
+	if len(h) != historyKeep {
+		t.Fatalf("kept %d entries", len(h))
+	}
+	for i, want := range []string{"newest", "second newest"} {
+		if got, _ := a.HistoryConfig(h[i].ID); got != want {
+			t.Errorf("entry %d is %q, want %q", i, got, want)
+		}
+	}
+	if h[len(h)-1].ID != "1790000000-200" {
+		t.Errorf("oldest kept is %s; the two oldest should be gone", h[len(h)-1].ID)
 	}
 }
