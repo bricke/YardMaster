@@ -18,7 +18,7 @@
 
   <g font-family="Noto Sans, Liberation Sans, sans-serif">
     <text x="346" y="305" font-size="92" font-weight="700" fill="#e6edf3">YardMaster</text>
-    <text x="350" y="365" font-size="34" fill="#b1bac4">A shared LLM gateway for the team</text>
+    <text x="350" y="365" font-size="34" fill="#b1bac4">A self-hosted LLM gateway for your team</text>
     <text x="350" y="415" font-size="24" fill="#8b949e">Per-person tokens · smart model routing · usage tracking</text>
   </g>
 </svg>
