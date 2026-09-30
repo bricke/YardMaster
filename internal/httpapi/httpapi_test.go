@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -142,6 +143,40 @@ func TestOriginGuardIgnoresForwardedHostWithBuiltinSignIn(t *testing.T) {
 	rec := do(h, "POST", "/api/admin/users", `{"username":"eve"}`, cookie, "Origin", "http://evil.test", "X-Forwarded-Host", "evil.test")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("forwarded host believed in built-in mode: %d", rec.Code)
+	}
+}
+
+func TestConnectUsesTheBrowsersHost(t *testing.T) {
+	origin := func(rec *httptest.ResponseRecorder) string {
+		var out struct {
+			OpenAIBase string `json:"openai_base"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out.OpenAIBase
+	}
+	cfg := settings.Settings{Auth: settings.AuthProxy, TLS: settings.TLSOff, Proxy: settings.ProxySettings{
+		Secret: "a-long-shared-secret", UserHeader: "X-Remote-User", RoleHeader: "X-Remote-Role",
+	}}
+	_, h := newServer(t, cfg)
+	// Behind the trusted proxy, the guide uses the name and scheme the browser used.
+	rec := do(h, "GET", "/api/connect", "", "", "X-Remote-User", "alice", auth.ProxySecretHeader, "a-long-shared-secret",
+		"X-Forwarded-Host", "ai.example.com", "X-Forwarded-Proto", "https")
+	if got := origin(rec); got != "https://ai.example.com/v1" {
+		t.Errorf("behind the proxy: %q (%d %s)", got, rec.Code, rec.Body)
+	}
+	// Without X-Forwarded-Host, it falls back to the Host header.
+	rec = do(h, "GET", "/api/connect", "", "", "X-Remote-User", "alice", auth.ProxySecretHeader, "a-long-shared-secret")
+	if got := origin(rec); got != "http://ym.test/v1" {
+		t.Errorf("no forwarded host: %q", got)
+	}
+
+	// With built-in sign-in, X-Forwarded-Host is ignored.
+	s, h := newServer(t, settings.Settings{TLS: settings.TLSOff})
+	admin, _ := s.Auth.CreateAdmin(t.Context(), "admin", "correct horse battery")
+	cookie, _ := s.Auth.NewSession(t.Context(), admin.ID)
+	rec = do(h, "GET", "/api/connect", "", cookie, "X-Forwarded-Host", "evil.test")
+	if got := origin(rec); got != "http://ym.test/v1" {
+		t.Errorf("built-in sign-in: %q", got)
 	}
 }
 

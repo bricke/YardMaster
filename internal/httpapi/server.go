@@ -280,11 +280,17 @@ func (s *Server) isSiteHost(r *http.Request, host string) bool {
 	if strings.EqualFold(host, r.Host) {
 		return true
 	}
-	if s.Settings.Auth != settings.AuthProxy || !auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true) {
-		return false
-	}
-	fwd := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	fwd := s.forwardedHost(r)
 	return fwd != "" && strings.EqualFold(host, fwd)
+}
+
+// forwardedHost is the first X-Forwarded-Host, believed only from the trusted proxy; empty
+// otherwise.
+func (s *Server) forwardedHost(r *http.Request) string {
+	if s.Settings.Auth != settings.AuthProxy || !auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true) {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
 }
 
 // ---- helpers ----
