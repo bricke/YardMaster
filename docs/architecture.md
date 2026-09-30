@@ -58,7 +58,7 @@ Each surface accepts exactly one kind of credential.
 | Path | Who | Credential | What happens |
 |---|---|---|---|
 | `/`, static assets | Browsers | none (login page) or session cookie | The embedded Svelte app |
-| `/api/*` | The UI | Session cookie; writes also need a matching `Origin` | Admin and user API. Role checked on every call; users reach only their own tokens and usage |
+| `/api/*` | The UI | Session cookie; writes also need an `Origin` matching `Host` (or, from the trusted proxy, `X-Forwarded-Host`) | Admin and user API. Role checked on every call; users reach only their own tokens and usage |
 | `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/models` | Coworkers' tools | `ym_` token in `Authorization: Bearer` or in `x-api-key` (what Anthropic SDKs and Claude Code send) | Gateway (below) |
 | `/setup`, `/ca.crt`, `/health` on 8080 when HTTPS is active | Anyone | none | Setup page for trusting the CA |
 

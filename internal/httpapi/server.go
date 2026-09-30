@@ -265,13 +265,26 @@ func (s *Server) originGuard(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			origin := r.Header.Get("Origin")
 			u, err := url.Parse(origin)
-			if origin == "" || err != nil || !strings.EqualFold(u.Host, r.Host) {
+			if origin == "" || err != nil || !s.isSiteHost(r, u.Host) {
 				writeError(w, http.StatusForbidden, "request refused: it didn't come from this site")
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSiteHost reports whether host is the name the browser used to reach YardMaster: the
+// Host header or, behind the trusted proxy, the host it forwarded in X-Forwarded-Host.
+func (s *Server) isSiteHost(r *http.Request, host string) bool {
+	if strings.EqualFold(host, r.Host) {
+		return true
+	}
+	if s.Settings.Auth != settings.AuthProxy || !auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true) {
+		return false
+	}
+	fwd := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	return fwd != "" && strings.EqualFold(host, fwd)
 }
 
 // ---- helpers ----
