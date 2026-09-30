@@ -23,7 +23,9 @@
     checking = false
   }
 
-  // Re-check whenever the candidate's content changes.
+  // Re-check whenever the candidate's content changes. A successful apply reloads the
+  // page's config, which changes the candidate without changing the TOML, so its result is
+  // kept: it shows for as long as the check finds nothing new to apply.
   let lastKey = ''
   let timer
   $effect(() => {
@@ -31,7 +33,7 @@
     if (key === lastKey) return
     lastKey = key
     preview = null
-    result = null
+    if (!result?.ok) result = null
     clearTimeout(timer)
     timer = setTimeout(check, 400)
   })
@@ -61,7 +63,11 @@
     {:else if preview.errors}
       <div class="alert critical"><strong>Can't apply yet.</strong>{'\n'}{preview.errors}</div>
     {:else if !preview.changed}
-      <div class="alert good">✓ Valid, and identical to the running config. Nothing to apply.</div>
+      {#if result?.ok}
+        <div class="alert good">✓ Applied. The router is running the new config.</div>
+      {:else}
+        <div class="alert good">✓ Valid, and identical to the running config. Nothing to apply.</div>
+      {/if}
     {:else}
       <div class="alert good">✓ Switchyard accepts this config.</div>
       <div>
@@ -76,9 +82,7 @@
       </div>
     {/if}
 
-    {#if result?.ok}
-      <div class="alert good">✓ Applied. The router is running the new config.</div>
-    {:else if result}
+    {#if result && !result.ok}
       <div class="alert critical">
         <strong>{result.reason}</strong>
         {#if result.detail?.rolled_back}{'\n'}The previous config was restored and is running.{/if}
