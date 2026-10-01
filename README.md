@@ -4,7 +4,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Svelte 5](https://img.shields.io/badge/svelte-5-FF3E00?logo=svelte&logoColor=white)](web/package.json)
-[![Docker image](https://img.shields.io/badge/docker-image-2496ED?logo=docker&logoColor=white)](docs/install.md)
+[![Docker image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/bricke/YardMaster/pkgs/container/yardmaster)
 
 YardMaster is software with two proxies inside, delivered as a Docker image:
 
@@ -63,17 +63,16 @@ People see only their own usage; the admin sees everyone's.
 ## Quick start
 
 ```bash
-make image
 docker run -d --name yardmaster --restart unless-stopped \
   -p 8080:8080 -p 8443:8443 -v yardmaster-data:/data \
   -e YARDMASTER_SECRET_KEY="$(openssl rand -base64 32)" \
-  yardmaster
+  ghcr.io/bricke/yardmaster
 docker logs yardmaster        # shows a one-time setup code
 ```
 
 Then open `http://<host>:8080`. Keep the secret key safe: it encrypts your provider keys, and
-without it they can't be read back. [install.md](docs/install.md) has the full steps, and how to
-run YardMaster without Docker.
+without it they can't be read back. [install.md](docs/install.md) has the full steps, how to build
+the image yourself, and how to run YardMaster without Docker.
 
 ## Documentation
 
