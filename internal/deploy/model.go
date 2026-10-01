@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
+	"yardmaster/internal/jev"
 	"yardmaster/internal/secrets"
 )
 
@@ -53,6 +55,16 @@ type Client struct {
 	KeyEnv     string `json:"key_env,omitempty"`
 	MaxRetries *int   `json:"max_retries,omitempty"`
 	TimeoutMS  *int   `json:"timeout_ms,omitempty"`
+}
+
+// IsJev reports whether the client is YardMaster's Jev judge adapter (package jev).
+func (c Client) IsJev() bool {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return (h == "127.0.0.1" || h == "localhost") && strings.TrimSuffix(u.Path, "/") == jev.PathPrefix
 }
 
 // Target is one model on one client ([targets.<name>]).
@@ -121,8 +133,15 @@ func (d *Deployment) Validate() error {
 
 	clients := map[string]bool{}
 	formats := map[string]string{}
+	jevClients := map[string]bool{}
 	for _, c := range d.Clients {
 		formats[c.Name] = c.Format
+		if c.IsJev() {
+			jevClients[c.Name] = true
+			if c.Format != "openai_chat" {
+				add("provider %q: TypeSafe's Jev is reached through YardMaster's adapter, which speaks openai_chat", c.Name)
+			}
+		}
 		switch {
 		case c.Name == "":
 			add("a provider has no name: give it one, like openrouter")
@@ -156,7 +175,11 @@ func (d *Deployment) Validate() error {
 	}
 
 	targets := map[string]bool{}
+	jevTargets := map[string]bool{}
 	for _, t := range d.Targets {
+		if jevClients[t.Client] {
+			jevTargets[t.Name] = true
+		}
 		switch {
 		case t.Name == "":
 			add("a model has no name: give it a short label, like qwen")
@@ -206,6 +229,8 @@ func (d *Deployment) Validate() error {
 			add("route %q: %s is required", route, field)
 		} else if !targets[name] {
 			add("route %q: %s %q isn't a defined model", route, field, name)
+		} else if jevTargets[name] && field != "judge model" {
+			add("route %q: %s %q is TypeSafe's Jev, which can only be the judge of a classifier route", route, field, name)
 		}
 	}
 	routeNames, routeIDs := map[string]bool{}, map[string]bool{}

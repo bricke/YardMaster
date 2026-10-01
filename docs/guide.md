@@ -50,6 +50,23 @@ them, including how to choose a judge.
 
 ![How routing works](images/help-routing.png)
 
+#### TypeSafe's Jev as the judge
+
+[Jev](https://docs.typesafe.ai/introduction) is a hosted model from TypeSafe that returns calibrated
+probabilities instead of text. It can be the judge of a **Classifier (capability)** route, where it
+decides in about a tenth of a second. It can't answer requests itself.
+
+1. In **Providers**, choose **TypeSafe Jev (judge only)** and set its key (from the TypeSafe
+   console).
+2. In **Models**, add a model served by it with the ID `jev-latest`, or a versioned ID such as
+   `jev-1.13.0` to keep a tuned threshold stable when TypeSafe ships a new version.
+3. In **Routes**, pick it as the judge of a classifier route. Start the threshold at 0.5 and check
+   it in the Playground.
+
+YardMaster connects Jev to the router through a small built-in adapter; see
+[architecture](architecture.md#jev-judge-adapter). Prompts sent to the judge go to TypeSafe, as
+they would to any other judge's provider.
+
 ### Apply
 
 **Review & apply** checks the config with Switchyard itself and shows what changed. Applying

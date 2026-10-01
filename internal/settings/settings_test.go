@@ -16,7 +16,8 @@ func clearEnv(t *testing.T) {
 		"YARDMASTER_PROXY_SECRET", "YARDMASTER_PROXY_USER_HEADER", "YARDMASTER_PROXY_ROLE_HEADER",
 		"YARDMASTER_PROXY_ADMIN_ROLES", "YARDMASTER_PROXY_ADDRESSES", "YARDMASTER_HTTP_PORT",
 		"YARDMASTER_HTTPS_PORT", "YARDMASTER_SWITCHYARD_PORT", "YARDMASTER_USAGE_RETENTION_DAYS",
-		"YARDMASTER_AUDIT_RETENTION_DAYS", "YARDMASTER_SHUTDOWN_TIMEOUT",
+		"YARDMASTER_AUDIT_RETENTION_DAYS", "YARDMASTER_SHUTDOWN_TIMEOUT", "YARDMASTER_JUDGE_PORT",
+		"YARDMASTER_TYPESAFE_URL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -28,7 +29,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.DataDir != "/data" || s.HTTPPort != 8080 || s.HTTPSPort != 8443 || s.SwitchyardPort != 4000 {
+	if s.DataDir != "/data" || s.HTTPPort != 8080 || s.HTTPSPort != 8443 || s.SwitchyardPort != 4000 || s.JudgePort != 4001 {
 		t.Errorf("paths and ports: %+v", s)
 	}
 	if s.Auth != AuthBuiltin || s.TLS != TLSAuto || s.ShutdownTimeout != 30*time.Second {

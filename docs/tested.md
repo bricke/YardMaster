@@ -7,6 +7,7 @@ Tested on a LAN server on 2026-09-29, with Switchyard v0.3.0:
 | Anthropic | Claude Haiku 4.5 | Answers well and judges well: 2–4 s per judge decision |
 | OpenAI | GPT-6 Luna | Works through both API styles. It reasons at length, so tools need large output limits. Slow as a judge (18 s on a hard prompt) |
 | Mistral | Ministral 14B | Fast answers (about 1.3 s) and quick judging (2–3 s), but lenient: at threshold 0.4 it sent a hard design task to the weak model |
+| TypeSafe | Jev 1.13 (judge only) | Judged Switchyard's capability classifier through YardMaster's adapter in 90–210 ms per decision, about 950 input tokens each. On 24 labeled prompts, easy ones scored 0.94 or higher and hard ones 0.34 or lower, so any threshold from 0.4 to 0.7 routed them all correctly. Prompts over its 32k-token context are trimmed |
 | Self-hosted (vLLM) | Qwen 3.8 27B | Works, and thinking can be switched off per model. As a judge it reasoned for minutes, so it's a poor judge |
 
 ## What real traffic taught us

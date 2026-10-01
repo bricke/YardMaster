@@ -45,8 +45,12 @@ type Settings struct {
 	Auth  string
 	Proxy ProxySettings
 
-	SwitchyardBin     string
-	SwitchyardPort    int
+	SwitchyardBin  string
+	SwitchyardPort int
+	// JudgePort is the loopback port of the adapter that lets TypeSafe's Jev be a judge.
+	JudgePort int
+	// TypeSafeURL is Jev's evaluation endpoint.
+	TypeSafeURL       string
 	SwitchyardVersion string
 	ShutdownTimeout   time.Duration
 
@@ -75,6 +79,7 @@ func Load() (Settings, error) {
 		Auth:              env("YARDMASTER_AUTH", AuthBuiltin),
 		SwitchyardBin:     env("YARDMASTER_SWITCHYARD_BIN", "switchyard-server"),
 		SwitchyardVersion: env("YARDMASTER_SWITCHYARD_VERSION", "unknown"),
+		TypeSafeURL:       env("YARDMASTER_TYPESAFE_URL", "https://api.typesafe.ai/v1/systemone"),
 		Proxy: ProxySettings{
 			Secret:     os.Getenv("YARDMASTER_PROXY_SECRET"),
 			UserHeader: env("YARDMASTER_PROXY_USER_HEADER", "X-Remote-User"),
@@ -90,6 +95,9 @@ func Load() (Settings, error) {
 		return s, err
 	}
 	if s.SwitchyardPort, err = intEnv("YARDMASTER_SWITCHYARD_PORT", 4000); err != nil {
+		return s, err
+	}
+	if s.JudgePort, err = intEnv("YARDMASTER_JUDGE_PORT", 4001); err != nil {
 		return s, err
 	}
 	if s.UsageRetentionDays, err = intEnv("YARDMASTER_USAGE_RETENTION_DAYS", 90); err != nil {
