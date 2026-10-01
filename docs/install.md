@@ -92,8 +92,9 @@ Otherwise every change made in the UI is refused with "it didn't come from this 
 **Connect an agent** shows the internal address instead of the one your coworkers use. Caddy and
 Traefik send both by default; with nginx, add `proxy_set_header X-Forwarded-Host $http_host;`
 (`$http_host` keeps the port, which the check needs) and
-`proxy_set_header X-Forwarded-Proto $scheme;`. YardMaster believes these headers only from the
-trusted proxy.
+`proxy_set_header X-Forwarded-Proto $scheme;`. The audit log records the client's address from
+`X-Forwarded-For`. YardMaster believes these headers only from the trusted proxy: a request carrying
+the shared secret, or one from an address in `YARDMASTER_PROXY_ADDRESSES`.
 
 ## Configuration
 

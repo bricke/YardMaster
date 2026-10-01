@@ -14,13 +14,17 @@ type Filter struct {
 	TokenID  int64
 }
 
-func (f Filter) where() (string, []any) {
-	days := f.Days
-	if days <= 0 || days > 400 {
-		days = 30
+// days is the period in days: Days, or 30 when it's out of range.
+func (f Filter) days() int {
+	if f.Days <= 0 || f.Days > 400 {
+		return 30
 	}
+	return f.Days
+}
+
+func (f Filter) where() (string, []any) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	start := today.AddDate(0, 0, -(days - 1)).Unix()
+	start := today.AddDate(0, 0, -(f.days() - 1)).Unix()
 	w := []string{"created_at >= ?"}
 	args := []any{start}
 	if f.UserName != "" {
@@ -92,7 +96,7 @@ type Summary struct {
 // Summarize builds a Summary for the filter.
 func (q *Ledger) Summarize(ctx context.Context, f Filter) (*Summary, error) {
 	where, args := f.where()
-	s := &Summary{Days: max(f.Days, 1)}
+	s := &Summary{Days: f.days()}
 	row := q.db.QueryRowContext(ctx, `SELECT `+totalsColumns+` FROM usage_events`+where, args...)
 	var err error
 	if s.Totals, err = scanTotals(row, nil); err != nil {

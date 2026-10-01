@@ -45,7 +45,7 @@ func (s *Service) ProxyIdentity(ctx context.Context, r *http.Request, cfg settin
 // ProxyTrusted reports whether r came from the trusted proxy: it carries the shared secret
 // or, when allowAddress is set, it comes from a configured proxy address.
 func ProxyTrusted(r *http.Request, cfg settings.ProxySettings, remote netip.Addr, allowAddress bool) bool {
-	if HasProxySecret(r, cfg.Secret) {
+	if hasProxySecret(r, cfg.Secret) {
 		return true
 	}
 	if allowAddress {
@@ -58,8 +58,8 @@ func ProxyTrusted(r *http.Request, cfg settings.ProxySettings, remote netip.Addr
 	return false
 }
 
-// HasProxySecret reports whether r carries the shared proxy secret.
-func HasProxySecret(r *http.Request, secret string) bool {
+// hasProxySecret reports whether r carries the shared proxy secret.
+func hasProxySecret(r *http.Request, secret string) bool {
 	if secret == "" {
 		return false
 	}
