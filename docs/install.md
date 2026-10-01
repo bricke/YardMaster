@@ -4,10 +4,17 @@ YardMaster is software made of one Go binary, with the web UI built in, plus Swi
 `switchyard-server`, which YardMaster starts and supervises. It's delivered as a Docker image that
 holds both. You can also build and run it [without Docker](#without-docker).
 
-## Build the image
+## Get the image
 
-Switchyard publishes no image, so the build compiles it from a pinned release. The first build
-takes several minutes.
+Each release is published as `ghcr.io/bricke/yardmaster`, tagged with its version (`0.2.0`), its
+minor line (`0.2`) and `latest`. Pin a version so an upgrade happens only when you choose it:
+
+```bash
+docker pull ghcr.io/bricke/yardmaster:0.2
+```
+
+To build it yourself instead, from a release tag or `main`: Switchyard publishes no image, so the
+build compiles it from a pinned release, and the first build takes several minutes.
 
 ```bash
 make image            # tags yardmaster:latest, and the YardMaster and Switchyard versions
@@ -23,9 +30,11 @@ docker run -d --name yardmaster --restart unless-stopped \
   -p 8080:8080 -p 8443:8443 \
   -v yardmaster-data:/data \
   -e YARDMASTER_SECRET_KEY="$(openssl rand -base64 32)" \
-  yardmaster
+  ghcr.io/bricke/yardmaster:0.2
 docker logs yardmaster        # shows a one-time setup code
 ```
+
+With an image you built, use `yardmaster` as the image name.
 
 Store the `YARDMASTER_SECRET_KEY` value somewhere safe. It encrypts the provider keys you enter;
 if you lose it, they can't be read back. A random key like the one above is best. A passphrase

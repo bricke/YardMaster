@@ -1,0 +1,69 @@
+# Publishes the Docker image to ghcr.io/bricke/yardmaster when a GitHub release is published:
+# tagged with the release version (0.2.0), its minor line (0.2) and latest. Pre-releases
+# (v0.3.0-rc.1) get only their own version. Run it by hand to build and smoke-test without
+# pushing.
+name: Release image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/yardmaster
+
+jobs:
+  image:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - name: docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          build-args: VERSION=${{ steps.meta.outputs.version || format('dev-{0}', github.sha) }}
+          tags: |
+            yardmaster:smoke
+            ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run -d --name ym -p 8080:8080 -e YARDMASTER_TLS=off \
+            -e YARDMASTER_ADMIN_PASSWORD=ci-password-1 yardmaster:smoke
+          for i in $(seq 30); do
+            if curl -fsS http://127.0.0.1:8080/health; then
+              docker exec ym yardmaster version
+              docker exec ym test -x /usr/local/bin/switchyard-server
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs ym
+          exit 1
+      - name: Log in to GHCR
+        if: github.event_name == 'release'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: docker push
+        if: github.event_name == 'release'
+        run: docker push --all-tags "$IMAGE"
