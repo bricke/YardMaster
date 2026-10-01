@@ -284,14 +284,24 @@ func (s *Server) isSiteHost(r *http.Request, host string) bool {
 	return fwd != "" && strings.EqualFold(host, fwd)
 }
 
-// forwardedHost is the first X-Forwarded-Host, believed only from the trusted proxy; empty
+// fromTrustedProxy reports whether r came through the trusted proxy, by its shared secret
+// or a configured address: the same trust that lets it name the user, so its
+// X-Forwarded-* headers are believed too.
+func (s *Server) fromTrustedProxy(r *http.Request) bool {
+	return s.Settings.Auth == settings.AuthProxy && auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true)
+}
+
+// forwarded is the first value of an X-Forwarded-* header from the trusted proxy; empty
 // otherwise.
-func (s *Server) forwardedHost(r *http.Request) string {
-	if s.Settings.Auth != settings.AuthProxy || !auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true) {
+func (s *Server) forwarded(r *http.Request, header string) string {
+	if !s.fromTrustedProxy(r) {
 		return ""
 	}
-	return strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	return strings.TrimSpace(strings.Split(r.Header.Get(header), ",")[0])
 }
+
+// forwardedHost is the host the browser used, as the trusted proxy reports it.
+func (s *Server) forwardedHost(r *http.Request) string { return s.forwarded(r, "X-Forwarded-Host") }
 
 // ---- helpers ----
 
@@ -353,10 +363,8 @@ func remoteAddr(r *http.Request) netip.Addr {
 // clientIP is the address recorded in the audit log. Behind another proxy it's the
 // address the proxy reports.
 func (s *Server) clientIP(r *http.Request) string {
-	if s.Settings.Auth == settings.AuthProxy && auth.HasProxySecret(r, s.Settings.Proxy.Secret) {
-		if f := r.Header.Get("X-Forwarded-For"); f != "" {
-			return strings.TrimSpace(strings.Split(f, ",")[0])
-		}
+	if f := s.forwarded(r, "X-Forwarded-For"); f != "" {
+		return f
 	}
 	return remoteAddr(r).String()
 }
@@ -387,6 +395,5 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return s.Settings.Auth == settings.AuthProxy && auth.HasProxySecret(r, s.Settings.Proxy.Secret) &&
-		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return strings.EqualFold(s.forwarded(r, "X-Forwarded-Proto"), "https")
 }

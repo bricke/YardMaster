@@ -181,13 +181,12 @@ func (a *Applier) Apply(ctx context.Context, candidate, source string, model *De
 	}
 	parsed, _ := Parse(candidate)
 
-	a.sup.SetState(supervisor.StateRestarting)
-	a.sup.Stop()
+	// switchyard-server reads its config only at start, so it keeps running on the
+	// previous one until the restart; a failed write leaves it untouched.
 	if err := writeFile(a.configPath, candidate); err != nil {
-		a.restart(ctx, previous)
 		return err
 	}
-	if err := a.sup.Start(); err == nil && a.sup.WaitHealthy(ctx, healthTimeout) {
+	if a.startHealthy(ctx) {
 		a.setParsed(parsed)
 		a.saveHistory(candidate)
 		a.db.SetSetting(ctx, settingSource, source)
@@ -210,7 +209,7 @@ func (a *Applier) Apply(ctx context.Context, candidate, source string, model *De
 		fail.Reason += "; restoring the previous config also failed: " + err.Error()
 		return fail
 	}
-	fail.RolledBack = a.restart(ctx, previous)
+	fail.RolledBack = a.startHealthy(ctx)
 	if !fail.RolledBack {
 		fail.Reason += "; the previous config didn't come back up either"
 	}
@@ -229,27 +228,22 @@ func (a *Applier) Restart(ctx context.Context) error {
 	if current == "" {
 		return errors.New("no config applied yet")
 	}
-	if !a.restart(ctx, current) {
+	if !a.startHealthy(ctx) {
 		return &ApplyError{Reason: "switchyard-server didn't become healthy after the restart", Logs: tail(a.sup.Logs(), 20)}
 	}
 	return nil
 }
 
-func (a *Applier) restart(ctx context.Context, config string) bool {
-	if config == "" {
-		return false
-	}
+// startHealthy restarts switchyard-server on the config file, showing "restarting" until
+// it answers /health. It reports whether it did; if not, the state is down.
+func (a *Applier) startHealthy(ctx context.Context) bool {
 	a.sup.SetState(supervisor.StateRestarting)
 	a.sup.Stop()
-	if err := a.sup.Start(); err != nil {
-		a.sup.SetState(supervisor.StateDown)
-		return false
+	if err := a.sup.Start(); err == nil && a.sup.WaitHealthy(ctx, healthTimeout) {
+		return true
 	}
-	if !a.sup.WaitHealthy(ctx, healthTimeout) {
-		a.sup.SetState(supervisor.StateDown)
-		return false
-	}
-	return true
+	a.sup.SetState(supervisor.StateDown)
+	return false
 }
 
 func (a *Applier) setParsed(p *Parsed) {

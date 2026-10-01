@@ -219,3 +219,40 @@ func TestTrustedProxyMode(t *testing.T) {
 		t.Fatalf("gateway accepted a request without the secret: %d", rec.Code)
 	}
 }
+
+func TestForwardedHeadersTrustedLikeIdentity(t *testing.T) {
+	cfg := settings.Settings{Auth: settings.AuthProxy, Proxy: settings.ProxySettings{
+		Secret: "a-long-shared-secret", Addresses: []netip.Prefix{netip.MustParsePrefix("10.9.0.0/16")},
+	}}
+	s, _ := newServer(t, cfg)
+	req := func(remote string, headers ...string) *http.Request {
+		r := httptest.NewRequest("GET", "http://ym.test/api/session", nil)
+		r.RemoteAddr = remote
+		r.Header.Set("X-Forwarded-For", "192.0.2.7, 10.9.0.5")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		for i := 0; i+1 < len(headers); i += 2 {
+			r.Header.Set(headers[i], headers[i+1])
+		}
+		return r
+	}
+	// A proxy trusted by its address or by the secret reports the client's address and scheme.
+	for name, r := range map[string]*http.Request{
+		"address": req("10.9.0.5:5555"),
+		"secret":  req("203.0.113.1:5555", auth.ProxySecretHeader, "a-long-shared-secret"),
+	} {
+		if got := s.clientIP(r); got != "192.0.2.7" {
+			t.Errorf("%s: client IP %q", name, got)
+		}
+		if !s.isHTTPS(r) {
+			t.Errorf("%s: forwarded https ignored", name)
+		}
+	}
+	// Anyone else's X-Forwarded-* headers are ignored.
+	r := req("203.0.113.1:5555")
+	if got := s.clientIP(r); got != "203.0.113.1" {
+		t.Errorf("untrusted: client IP %q", got)
+	}
+	if s.isHTTPS(r) {
+		t.Error("untrusted: forwarded https believed")
+	}
+}

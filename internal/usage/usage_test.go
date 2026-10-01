@@ -128,3 +128,16 @@ func abs(v float64) float64 {
 	}
 	return v
 }
+
+func TestSummaryDaysMatchTheQuery(t *testing.T) {
+	l, _, ctx := setup(t)
+	for _, c := range []struct{ asked, want int }{{7, 7}, {0, 30}, {-3, 30}, {1000, 30}} {
+		s, err := l.Summarize(ctx, Filter{Days: c.asked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Days != c.want || len(s.ByDay) != c.want {
+			t.Errorf("days=%d: summary covers %d days with %d chart points, want %d", c.asked, s.Days, len(s.ByDay), c.want)
+		}
+	}
+}
