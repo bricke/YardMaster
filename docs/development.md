@@ -23,10 +23,11 @@ the build cache.
 ## Releasing
 
 Publish a GitHub release with a tag like `v0.2.0`; the version comes from the tag. Publishing runs
-`.github/workflows/release.yml`, which builds the image, smoke-tests it and pushes it to
-`ghcr.io/bricke/yardmaster` as `0.2.0`, `0.2` and `latest` (a pre-release such as `v0.3.0-rc.1` gets
-only its own tag). Running that workflow by hand from the Actions tab builds and tests without
-pushing.
+`.github/workflows/release.yml`, which builds the image for `linux/amd64` and `linux/arm64`, each
+on its own native runner (no emulation), smoke-tests both, and pushes them to
+`ghcr.io/bricke/yardmaster` as one multi-platform image tagged `0.2.0`, `0.2` and `latest` (a
+pre-release such as `v0.3.0-rc.1` gets only its own tag). Running that workflow by hand from the
+Actions tab, on any branch, builds and tests both platforms without pushing.
 
 The supervisor tests don't need `switchyard-server`: the test binary stands in for it, and the config
 file's contents tell it how to behave (healthy, crashing, ignoring SIGTERM…). See
