@@ -35,7 +35,7 @@ func TestThrottleUnknownNamesLockLikeAccounts(t *testing.T) {
 	for i := range maxFailuresAccount {
 		th.Fail("nobody", fmt.Sprintf("10.0.0.%d", i))
 	}
-	if th.Allow("nobody", "10.1.1.1") {
+	if th.Begin("nobody", "10.1.1.1") {
 		t.Error("an unknown username was never throttled")
 	}
 }
@@ -51,10 +51,47 @@ func TestThrottleImpossibleNamesCountAgainstTheIP(t *testing.T) {
 	if len(th.accounts) != 0 {
 		t.Errorf("%d entries kept for names that can't be usernames", len(th.accounts))
 	}
-	if th.Allow("admin", "10.0.0.1") {
+	if th.Begin("admin", "10.0.0.1") {
 		t.Error("the IP limit didn't apply")
 	}
-	if !th.Allow("admin", "10.0.0.2") {
+	if !th.Begin("admin", "10.0.0.2") {
 		t.Error("another IP was throttled")
+	}
+}
+
+func TestThrottleCountsAttemptsInProgress(t *testing.T) {
+	th := NewThrottle()
+	fakeClock(th)
+	// Parallel guesses at one account, from many addresses.
+	for i := range maxFailuresAccount {
+		if !th.Begin("admin", fmt.Sprintf("10.0.0.%d", i)) {
+			t.Fatalf("attempt %d refused", i)
+		}
+	}
+	if th.Begin("admin", "10.0.1.1") {
+		t.Error("an attempt beyond the account limit was allowed while the others were still running")
+	}
+	// Parallel guesses from one address, at many accounts.
+	for i := range maxFailuresIP {
+		if !th.Begin(fmt.Sprintf("user%d", i), "10.9.9.9") {
+			t.Fatalf("attempt %d refused", i)
+		}
+	}
+	if th.Begin("someone", "10.9.9.9") {
+		t.Error("an attempt beyond the IP limit was allowed while the others were still running")
+	}
+	// Attempts that end without failing leave nothing behind, so many people signing in
+	// from one office address are never throttled.
+	for i := range maxFailuresAccount {
+		th.Done("admin", fmt.Sprintf("10.0.0.%d", i))
+	}
+	for i := range maxFailuresIP {
+		th.Done(fmt.Sprintf("user%d", i), "10.9.9.9")
+	}
+	if len(th.pendingAccounts) != 0 || len(th.pendingIPs) != 0 {
+		t.Errorf("attempts still counted: %v %v", th.pendingAccounts, th.pendingIPs)
+	}
+	if !th.Begin("admin", "10.9.9.9") {
+		t.Error("refused after every attempt ended")
 	}
 }
