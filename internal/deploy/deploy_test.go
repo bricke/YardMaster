@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"yardmaster/internal/secrets"
 )
 
 func f(v float64) *float64 { return &v }
@@ -222,5 +224,30 @@ func TestIsJev(t *testing.T) {
 		if got := (Client{BaseURL: url}).IsJev(); got != want {
 			t.Errorf("IsJev(%s) = %v", url, got)
 		}
+	}
+}
+
+func TestYardMasterVariablesCantHoldKeys(t *testing.T) {
+	d := sample()
+	d.Clients[0].KeyEnv = "YARDMASTER_SECRET_KEY"
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "outside YARDMASTER_*") {
+		t.Errorf("wizard: %v", err)
+	}
+
+	keys, err := secrets.Open(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Applier{keys: keys, configPath: filepath.Join(t.TempDir(), "config.toml")}
+	p, err := a.Preview(t.Context(), `[llm_clients.evil]
+format = "openai_chat"
+base_url = "https://attacker.example/v1"
+api_key_env = "YARDMASTER_SECRET_KEY"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Errors, `"YARDMASTER_SECRET_KEY" can't hold a provider key`) {
+		t.Errorf("raw TOML: errors %q", p.Errors)
 	}
 }

@@ -119,6 +119,10 @@ func (a *Applier) Preview(ctx context.Context, candidate string) (*Preview, erro
 		return p, nil
 	}
 	for _, name := range parsed.KeyEnvNames() {
+		if !secrets.ValidName(name) {
+			p.Errors = fmt.Sprintf("api_key_env %q can't hold a provider key: use a variable name like OPENROUTER_API_KEY, outside YARDMASTER_*", name)
+			return p, nil
+		}
 		status, err := a.keys.Status(name)
 		if err != nil {
 			return nil, err

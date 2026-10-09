@@ -153,3 +153,26 @@ func TestRawKeyKeepsItsFormat(t *testing.T) {
 		t.Fatalf("raw key on a passphrase file: %v", err)
 	}
 }
+
+func TestYardMasterVariablesCantHoldKeys(t *testing.T) {
+	s, err := Open(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.lookup = func(name string) (string, bool) {
+		if name == "YARDMASTER_SECRET_KEY" {
+			return "the-master-key", true
+		}
+		return "", false
+	}
+	if err := s.Set("YARDMASTER_PROXY_SECRET", "x"); err == nil {
+		t.Error("a key was stored under a YARDMASTER_ name")
+	}
+	// The status doesn't tell whether the variable is set.
+	if st, _ := s.Status("YARDMASTER_SECRET_KEY"); st != Missing {
+		t.Errorf("status %s, want %s", st, Missing)
+	}
+	if env, _ := s.Env([]string{"YARDMASTER_SECRET_KEY"}); len(env) != 0 {
+		t.Errorf("YardMaster's own secret reached the env: %v", env)
+	}
+}
