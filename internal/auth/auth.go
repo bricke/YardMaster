@@ -335,8 +335,8 @@ func (s *Service) SetActive(ctx context.Context, userID int64, active bool) erro
 }
 
 // DeleteUser removes an account with its sessions and tokens (foreign keys cascade). Usage
-// rows keep a snapshot of the name, so totals stay correct. The admin can't be
-// deleted.
+// rows keep a snapshot of the name, so totals stay correct; the caller moves them to a
+// label of their own (usage.Ledger.RelabelUser). The admin can't be deleted.
 func (s *Service) DeleteUser(ctx context.Context, userID int64) (*User, error) {
 	u, err := s.UserByID(ctx, userID)
 	if err != nil {

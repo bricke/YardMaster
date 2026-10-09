@@ -163,7 +163,7 @@
     {:else if confirm.action === 'deactivate'}
       <p>Deactivate <strong>{confirm.user.display_name}</strong>? They're signed out and all their tokens stop working at once. You can reactivate them later.</p>
     {:else if confirm.action === 'delete'}
-      <p>Delete <strong>{confirm.user.display_name}</strong> (<code>{confirm.user.username}</code>)? Their account, sessions and tokens are removed at once and can't be restored. Their past usage stays in the usage history, under their username.</p>
+      <p>Delete <strong>{confirm.user.display_name}</strong> (<code>{confirm.user.username}</code>)? Their account, sessions and tokens are removed at once and can't be restored. Their past usage stays in the usage history, as <code>{confirm.user.username} (deleted …)</code>, so someone given the same username later doesn't see it.</p>
     {:else}
       <p>Reactivate <strong>{confirm.user.display_name}</strong>? Their tokens that aren't revoked or expired work again.</p>
     {/if}
