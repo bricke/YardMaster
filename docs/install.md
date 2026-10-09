@@ -6,8 +6,11 @@ holds both. You can also build and run it [without Docker](#without-docker).
 
 ## Get the image
 
-Each release is published as `ghcr.io/bricke/yardmaster`, tagged with its version (`0.2.0`), its
-minor line (`0.2`) and `latest`. Pin a version so an upgrade happens only when you choose it:
+Each release is published as `ghcr.io/bricke/yardmaster` for `linux/amd64` and `linux/arm64`,
+tagged with its version (`0.2.0`), its minor line (`0.2`) and `latest`; Docker picks the right one
+for the host. On amd64 it needs a CPU with AVX2 (Intel Haswell, AMD Zen or newer), on arm64 a
+Neoverse N1 or newer (AWS Graviton 2, Ampere Altra, NVIDIA Grace…), as Switchyard's own builds do.
+Pin a version so an upgrade happens only when you choose it:
 
 ```bash
 docker pull ghcr.io/bricke/yardmaster:0.2

@@ -1,7 +1,8 @@
 # Publishes the Docker image to ghcr.io/bricke/yardmaster when a GitHub release is published:
-# tagged with the release version (0.2.0), its minor line (0.2) and latest. Pre-releases
-# (v0.3.0-rc.1) get only their own version. Run it by hand to build and smoke-test without
-# pushing.
+# tagged with the release version (0.2.0), its minor line (0.2) and latest, for linux/amd64 and
+# linux/arm64. Pre-releases (v0.3.0-rc.1) get only their own version. Each platform is built
+# and smoke-tested on its own native runner, pushed by digest, and the digests are joined into
+# one multi-platform tag. Run it by hand to build and smoke-test both platforms without pushing.
 name: Release image
 
 on:
@@ -17,11 +18,22 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/yardmaster
 
 jobs:
-  image:
-    name: Build and push
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+      - name: Platform name
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
+        env:
+          PLATFORM: ${{ matrix.platform }}
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5
@@ -34,15 +46,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: false
+          platforms: ${{ matrix.platform }}
           load: true
           build-args: VERSION=${{ steps.meta.outputs.version || format('dev-{0}', github.sha) }}
-          tags: |
-            yardmaster:smoke
-            ${{ steps.meta.outputs.tags }}
+          tags: yardmaster:smoke
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
       - name: Smoke test
         run: |
           docker run -d --name ym -p 8080:8080 -e YARDMASTER_TLS=off \
@@ -51,12 +61,25 @@ jobs:
             if curl -fsS http://127.0.0.1:8080/health; then
               docker exec ym yardmaster version
               docker exec ym test -x /usr/local/bin/switchyard-server
+              docker exec ym switchyard-server --version
               exit 0
             fi
             sleep 1
           done
           docker logs ym
           exit 1
+      # On a manual run, keep the tested image for a day, to try it on real hardware:
+      # gh run download <run> -n image-linux-arm64, then docker load < yardmaster-linux-arm64.tar.gz
+      - name: Save the image
+        if: github.event_name == 'workflow_dispatch'
+        run: docker save yardmaster:smoke | gzip > "yardmaster-$PLATFORM_PAIR.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: image-${{ env.PLATFORM_PAIR }}
+          path: yardmaster-${{ env.PLATFORM_PAIR }}.tar.gz
+          compression-level: 0
+          retention-days: 1
       - name: Log in to GHCR
         if: github.event_name == 'release'
         uses: docker/login-action@v3
@@ -64,6 +87,62 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: docker push
+      # The same build again, from the cache, pushed by digest only; the merge job tags it.
+      - name: docker push by digest
+        id: push
         if: github.event_name == 'release'
-        run: docker push --all-tags "$IMAGE"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+      - name: Export digest
+        if: github.event_name == 'release'
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'release'
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Tag the multi-platform image
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create the multi-platform tags
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Inspect
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
