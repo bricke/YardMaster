@@ -190,3 +190,77 @@ func TestDeleteUserRemovesTokensAndSessions(t *testing.T) {
 		t.Fatal("the admin was deleted")
 	}
 }
+
+func TestProxyUsers(t *testing.T) {
+	ctx := context.Background()
+	s := New(store.OpenTest(t))
+
+	// Created on first sight; the proxy's role is stored and follows the header.
+	carol, err := s.ProxyUser(ctx, "carol", RoleUser)
+	if err != nil || carol.Source != SourceProxy || carol.Role != RoleUser {
+		t.Fatalf("first sight: %+v %v", carol, err)
+	}
+	s.ProxyUser(ctx, "carol", RoleAdmin)
+	if u, _ := s.UserByID(ctx, carol.ID); u.Role != RoleAdmin {
+		t.Errorf("proxy user's role not updated: %s", u.Role)
+	}
+
+	// An admin's deactivation holds even though the proxy still names them.
+	dave, _ := s.ProxyUser(ctx, "dave", RoleUser)
+	if err := s.SetActive(ctx, dave.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProxyUser(ctx, "dave", RoleUser); !errors.Is(err, ErrInactive) {
+		t.Errorf("deactivated proxy user: %v, want ErrInactive", err)
+	}
+	s.SetActive(ctx, dave.ID, true)
+	if _, err := s.ProxyUser(ctx, "dave", RoleUser); err != nil {
+		t.Errorf("reactivated proxy user: %v", err)
+	}
+
+	// Built-in accounts from before the proxy keep their stored role: the proxy's role
+	// applies to the request only.
+	admin, _ := s.CreateAdmin(ctx, "admin", "correct horse battery")
+	bob, _, _ := s.CreateUser(ctx, "bob", "")
+	if u, err := s.ProxyUser(ctx, "ADMIN", RoleUser); err != nil || u.ID != admin.ID || u.Role != RoleUser {
+		t.Errorf("proxy's role not applied to the request: %+v %v", u, err)
+	}
+	if u, err := s.ProxyUser(ctx, "bob", RoleAdmin); err != nil || u.ID != bob.ID || u.Role != RoleAdmin {
+		t.Errorf("proxy's role not applied to the request: %+v %v", u, err)
+	}
+	if u, _ := s.UserByID(ctx, admin.ID); u.Role != RoleAdmin {
+		t.Error("the built-in admin was demoted")
+	}
+	if u, _ := s.UserByID(ctx, bob.ID); u.Role != RoleUser {
+		t.Error("a built-in user was promoted")
+	}
+}
+
+func TestProxyUserFirstSightRace(t *testing.T) {
+	ctx := context.Background()
+	s := New(store.OpenTest(t))
+	const n = 10
+	ids := make(chan int64, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			<-start
+			u, err := s.ProxyUser(ctx, "erin", RoleUser)
+			if err != nil {
+				t.Errorf("first sight: %v", err)
+				return
+			}
+			ids <- u.ID
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(ids)
+	first := <-ids
+	for id := range ids {
+		if id != first {
+			t.Fatalf("two accounts for one proxy user: %d and %d", first, id)
+		}
+	}
+}

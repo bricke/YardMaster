@@ -168,6 +168,12 @@ path.
 Users get a temporary password from the admin, shown once, and must choose their own at first
 login; an admin reset works the same way and keeps their tokens.
 
+Behind a trusted proxy, an account is created on a person's first visit, and their role follows the
+proxy's role header on every request. An admin can still deactivate them in YardMaster; the proxy
+signing them in doesn't override that. A name that belongs to a built-in account, from before
+YardMaster moved behind the proxy, is the same person, but the proxy's role isn't stored on that
+account, so going back to built-in sign-in restores the roles it had.
+
 ## Data on disk (`/data`)
 
 ```
