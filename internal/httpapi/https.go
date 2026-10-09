@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -23,10 +24,31 @@ type httpsState struct {
 
 const settingHTTPS = "https"
 
+// httpsState returns the stored HTTPS state. It's read from the database once and then
+// kept in memory: port 8080 asks for it on every request, and only setHTTPSState changes it.
 func (s *Server) httpsState(ctx context.Context) httpsState {
-	var st httpsState
-	s.DB.GetSetting(ctx, settingHTTPS, &st)
-	return st
+	s.httpsMu.Lock()
+	defer s.httpsMu.Unlock()
+	if !s.httpsLoaded {
+		var st httpsState
+		if _, err := s.DB.GetSetting(ctx, settingHTTPS, &st); err != nil {
+			slog.Error("reading the HTTPS state", "err", err)
+			return httpsState{}
+		}
+		s.https, s.httpsLoaded = st, true
+	}
+	return s.https
+}
+
+// setHTTPSState stores the HTTPS state.
+func (s *Server) setHTTPSState(ctx context.Context, st httpsState) error {
+	s.httpsMu.Lock()
+	defer s.httpsMu.Unlock()
+	if err := s.DB.SetSetting(ctx, settingHTTPS, st); err != nil {
+		return err
+	}
+	s.https, s.httpsLoaded = st, true
+	return nil
 }
 
 // httpsActive reports whether YardMaster serves HTTPS on its HTTPS port, and the name
@@ -62,7 +84,7 @@ func (s *Server) SeedHTTPSName(ctx context.Context) {
 		return
 	}
 	if _, err := s.TLS.SetName(s.Settings.PublicHost); err == nil {
-		s.DB.SetSetting(ctx, settingHTTPS, httpsState{Name: s.Settings.PublicHost})
+		s.setHTTPSState(ctx, httpsState{Name: s.Settings.PublicHost})
 	}
 }
 
@@ -111,7 +133,7 @@ func (s *Server) handleHTTPSName(w http.ResponseWriter, r *http.Request, u *auth
 	if st.Name != in.Name {
 		st = httpsState{Name: in.Name}
 	}
-	if err := s.DB.SetSetting(r.Context(), settingHTTPS, st); err != nil {
+	if err := s.setHTTPSState(r.Context(), st); err != nil {
 		logErr(w, err)
 		return
 	}
@@ -143,7 +165,7 @@ func (s *Server) handleHTTPSConfirm(w http.ResponseWriter, r *http.Request, u *a
 		return
 	}
 	st.Confirmed = true
-	if err := s.DB.SetSetting(r.Context(), settingHTTPS, st); err != nil {
+	if err := s.setHTTPSState(r.Context(), st); err != nil {
 		logErr(w, err)
 		return
 	}

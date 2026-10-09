@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -62,6 +63,10 @@ type Server struct {
 
 	setupMu   sync.Mutex
 	setupCode string // first-run code printed to the log; "" once used
+
+	httpsMu     sync.Mutex
+	https       httpsState
+	httpsLoaded bool
 }
 
 func New(d Deps) *Server {
@@ -150,7 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/", s.gateway)
 	mux.HandleFunc("/", s.handleStatic)
 
-	return s.securityHeaders(s.originGuard(mux))
+	return s.securityHeaders(s.withForwarded(s.originGuard(mux)))
 }
 
 // PlainHandler serves port 8080. Until HTTPS is active it is the full application. Once
@@ -292,24 +297,51 @@ func (s *Server) isSiteHost(r *http.Request, host string) bool {
 	return fwd != "" && strings.EqualFold(host, fwd)
 }
 
-// fromTrustedProxy reports whether r came through the trusted proxy, by its shared secret
-// or a configured address: the same trust that lets it name the user, so its
-// X-Forwarded-* headers are believed too.
-func (s *Server) fromTrustedProxy(r *http.Request) bool {
-	return s.Settings.Auth == settings.AuthProxy && auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true)
+// forwarded is what the trusted proxy reports about a request: the host and scheme the
+// browser used and the client's address. It's empty unless the request came through the
+// proxy, by its shared secret or a configured address: the same trust that lets it name
+// the user.
+type forwarded struct {
+	host, proto, client string
 }
 
-// forwarded is the first value of an X-Forwarded-* header from the trusted proxy; empty
-// otherwise.
-func (s *Server) forwarded(r *http.Request, header string) string {
-	if !s.fromTrustedProxy(r) {
-		return ""
+type forwardedKey struct{}
+
+// withForwarded decides once per request whether to believe its X-Forwarded-* headers.
+func (s *Server) withForwarded(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), forwardedKey{}, s.readForwarded(r))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// forwardedFor returns what withForwarded decided for r.
+func (s *Server) forwardedFor(r *http.Request) forwarded {
+	if f, ok := r.Context().Value(forwardedKey{}).(forwarded); ok {
+		return f
 	}
-	return strings.TrimSpace(strings.Split(r.Header.Get(header), ",")[0])
+	return s.readForwarded(r)
+}
+
+func (s *Server) readForwarded(r *http.Request) forwarded {
+	if s.Settings.Auth != settings.AuthProxy || !auth.ProxyTrusted(r, s.Settings.Proxy, remoteAddr(r), true) {
+		return forwarded{}
+	}
+	// The proxy reports the browser's host and scheme, so their first value is its own. It
+	// appends the address it saw to whatever X-Forwarded-For the client sent, so only the
+	// last value is.
+	host := strings.Split(r.Header.Get("X-Forwarded-Host"), ",")
+	proto := strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")
+	client := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	return forwarded{
+		host:   strings.TrimSpace(host[0]),
+		proto:  strings.TrimSpace(proto[0]),
+		client: strings.TrimSpace(client[len(client)-1]),
+	}
 }
 
 // forwardedHost is the host the browser used, as the trusted proxy reports it.
-func (s *Server) forwardedHost(r *http.Request) string { return s.forwarded(r, "X-Forwarded-Host") }
+func (s *Server) forwardedHost(r *http.Request) string { return s.forwardedFor(r).host }
 
 // ---- helpers ----
 
@@ -371,8 +403,8 @@ func remoteAddr(r *http.Request) netip.Addr {
 // clientIP is the address recorded in the audit log. Behind another proxy it's the
 // address the proxy reports.
 func (s *Server) clientIP(r *http.Request) string {
-	if f := s.forwarded(r, "X-Forwarded-For"); f != "" {
-		return f
+	if c := s.forwardedFor(r).client; c != "" {
+		return c
 	}
 	return remoteAddr(r).String()
 }
@@ -403,5 +435,5 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(s.forwarded(r, "X-Forwarded-Proto"), "https")
+	return strings.EqualFold(s.forwardedFor(r).proto, "https")
 }
