@@ -112,13 +112,13 @@
               <a class="btn small" href={`/usage?user=${encodeURIComponent(u.username)}`}>Usage</a>
               {#if u.role !== 'admin' && u.source === 'builtin'}
                 <button class="btn small" onclick={() => (confirm = { user: u, action: 'reset' })} disabled={!u.active}>Reset password</button>
+              {/if}
+              {#if u.role !== 'admin'}
                 {#if u.active}
                   <button class="btn small danger" onclick={() => (confirm = { user: u, action: 'deactivate' })}>Deactivate</button>
                 {:else}
                   <button class="btn small" onclick={() => (confirm = { user: u, action: 'activate' })}>Reactivate</button>
                 {/if}
-              {/if}
-              {#if u.role !== 'admin'}
                 <button class="btn small danger" onclick={() => (confirm = { user: u, action: 'delete' })}>Delete</button>
               {/if}
             </div></td>
@@ -158,6 +158,8 @@
   {#if confirm}
     {#if confirm.action === 'reset'}
       <p>Reset the password of <strong>{confirm.user.display_name}</strong>? They'll be signed out and need the new temporary password. Their tokens keep working.</p>
+    {:else if confirm.action === 'deactivate' && confirm.user.source === 'proxy'}
+      <p>Deactivate <strong>{confirm.user.display_name}</strong>? They lose access to YardMaster and the gateway at once, even though the proxy still signs them in. You can reactivate them later.</p>
     {:else if confirm.action === 'deactivate'}
       <p>Deactivate <strong>{confirm.user.display_name}</strong>? They're signed out and all their tokens stop working at once. You can reactivate them later.</p>
     {:else if confirm.action === 'delete'}

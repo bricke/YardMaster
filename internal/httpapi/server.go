@@ -196,6 +196,9 @@ func (s *Server) currentUser(r *http.Request) (*auth.User, error) {
 func (s *Server) identifyGatewayCaller(r *http.Request) (*auth.Caller, error) {
 	if s.Settings.Auth == settings.AuthProxy {
 		u, err := s.Auth.ProxyIdentity(r.Context(), r, s.Settings.Proxy, remoteAddr(r), false)
+		if errors.Is(err, auth.ErrInactive) {
+			return nil, errors.New("this YardMaster account is deactivated")
+		}
 		if err != nil {
 			return nil, errors.New("request not authorized by the trusted proxy")
 		}
@@ -217,6 +220,11 @@ func (s *Server) identifyGatewayCaller(r *http.Request) (*auth.Caller, error) {
 func (s *Server) user(h func(http.ResponseWriter, *http.Request, *auth.User), allowTemp bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.currentUser(r)
+		if errors.Is(err, auth.ErrInactive) {
+			// Only behind another proxy: it still signs in people an admin deactivated here.
+			writeError(w, http.StatusForbidden, "your YardMaster account is deactivated; ask the admin")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "sign in first")
 			return

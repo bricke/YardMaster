@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -217,6 +218,33 @@ func TestTrustedProxyMode(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("gateway accepted a request without the secret: %d", rec.Code)
+	}
+}
+
+func TestDeactivatedProxyUserIsShutOut(t *testing.T) {
+	cfg := settings.Settings{Auth: settings.AuthProxy, Proxy: settings.ProxySettings{
+		Secret: "a-long-shared-secret", UserHeader: "X-Remote-User", RoleHeader: "X-Remote-Role",
+		AdminRoles: []string{"admin"},
+	}}
+	s, h := newServer(t, cfg)
+	as := func(user, role string) []string {
+		return []string{"X-Remote-User", user, "X-Remote-Role", role, auth.ProxySecretHeader, "a-long-shared-secret"}
+	}
+	if rec := do(h, "GET", "/api/me/tokens", "", "", as("dave", "staff")...); rec.Code != 200 {
+		t.Fatalf("first visit: %d %s", rec.Code, rec.Body)
+	}
+	dave, _ := s.Auth.UserByName(t.Context(), "dave")
+	rec := do(h, "POST", fmt.Sprintf("/api/admin/users/%d/active", dave.ID), `{"active":false}`, "", as("matt", "admin")...)
+	if rec.Code != 200 {
+		t.Fatalf("deactivate: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/me/tokens", "", "", as("dave", "staff")...); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "deactivated") {
+		t.Errorf("UI after deactivation: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "POST", "/v1/chat/completions", `{"model":"x"}`, "", as("dave", "staff")...); rec.Code != http.StatusUnauthorized ||
+		!strings.Contains(rec.Body.String(), "deactivated") {
+		t.Errorf("gateway after deactivation: %d %s", rec.Code, rec.Body)
 	}
 }
 

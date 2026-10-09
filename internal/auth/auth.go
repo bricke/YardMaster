@@ -182,30 +182,41 @@ func (s *Service) insertUser(ctx context.Context, username, displayName, role, p
 }
 
 // ProxyUser returns the account for a user named by another proxy, creating it on first
-// sight. Its role follows the proxy's role header on every request.
+// sight, and refuses it if an admin deactivated it. Its role follows the proxy's role
+// header on every request.
+//
+// A name that belongs to a built-in account (one from before YardMaster moved behind the
+// proxy) is taken to be the same person, but that account's stored role is left alone:
+// the proxy's role applies to the request only. Going back to built-in sign-in then
+// neither keeps someone the proxy promoted an admin nor leaves the admin demoted.
 func (s *Service) ProxyUser(ctx context.Context, username, role string) (*User, error) {
 	u, err := s.UserByName(ctx, username)
 	if errors.Is(err, ErrNotFound) {
 		if !ValidUsername(username) {
 			return nil, errors.New("the proxy sent an unusable user name")
 		}
+		// Two first requests can race to create the account; both then read the same row.
 		_, err = s.db.ExecContext(ctx,
 			`INSERT INTO users (username, display_name, role, active, source, created_at)
-			 VALUES (?, ?, ?, 1, ?, ?)`, username, username, role, SourceProxy, store.Now())
+			 VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT(username) DO NOTHING`,
+			username, username, role, SourceProxy, store.Now())
 		if err != nil {
 			return nil, err
 		}
-		return s.UserByName(ctx, username)
+		u, err = s.UserByName(ctx, username)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if u.Role != role {
+	if !u.Active {
+		return nil, ErrInactive
+	}
+	if u.Role != role && u.Source == SourceProxy {
 		if _, err := s.db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, u.ID); err != nil {
 			return nil, err
 		}
-		u.Role = role
 	}
+	u.Role = role
 	return u, nil
 }
 
