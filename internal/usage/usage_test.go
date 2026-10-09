@@ -141,3 +141,37 @@ func TestSummaryDaysMatchTheQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestRelabelUserMovesAllTheirUsage(t *testing.T) {
+	l, _, ctx := setup(t)
+	old := time.Now().AddDate(0, 0, -120)
+	l.AddGateway(GatewayEvent{RequestID: "old", At: old, UserName: "bob", Status: 200})
+	l.AddGateway(GatewayEvent{RequestID: "new", At: time.Now(), UserName: "bob", Status: 200})
+	l.AddGateway(GatewayEvent{RequestID: "other", At: time.Now(), UserName: "bobby", Status: 200})
+	drain(l)
+	if err := l.Prune(ctx, 90); err != nil {
+		t.Fatal(err)
+	}
+	l.RelabelUser("bob", "bob (deleted)")
+	drain(l)
+
+	// Someone given the name later sees none of it, neither recent nor monthly.
+	if s, _ := l.Summarize(ctx, Filter{Days: 30, UserName: "bob"}); s.Totals.Requests != 0 {
+		t.Errorf("%d requests still under the name", s.Totals.Requests)
+	}
+	if m, _ := l.Monthly(ctx, "bob"); len(m) != 0 {
+		t.Errorf("monthly totals still under the name: %+v", m)
+	}
+	// The history stays readable under the label, and nobody else's moves.
+	var total int64
+	m, _ := l.Monthly(ctx, "bob (deleted)")
+	for _, row := range m {
+		total += row.Requests
+	}
+	if total != 2 {
+		t.Errorf("%d requests under the label, want 2", total)
+	}
+	if s, _ := l.Summarize(ctx, Filter{Days: 30, UserName: "bobby"}); s.Totals.Requests != 1 {
+		t.Errorf("another user's usage moved: %d left", s.Totals.Requests)
+	}
+}

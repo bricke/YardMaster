@@ -179,8 +179,16 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request, admin 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The name can be given to someone else, who mustn't see this person's usage.
+	s.Ledger.RelabelUser(u.Username, deletedLabel(u.Username, time.Now()))
 	s.record(r, admin, audit.UserDeleted, u.Username)
 	writeOK(w)
+}
+
+// deletedLabel is what a deleted user's usage is filed under. It can't be anyone's
+// username, which never holds spaces or brackets.
+func deletedLabel(name string, at time.Time) string {
+	return name + " (deleted " + at.UTC().Format(time.DateTime) + ")"
 }
 
 // ---- deployment ----
@@ -483,9 +491,13 @@ func (s *Server) switchyardCall(ctx context.Context, method, path string) (json.
 	return json.RawMessage(b), err
 }
 
+// playgroundLabel is the name playground calls are recorded under. The brackets keep it
+// from ever being someone's username, so nobody sees them as their own usage.
+const playgroundLabel = "(playground)"
+
 // handlePlayground asks Switchyard which target it would pick (POST /v1/decision). The
 // classifier and judge calls it makes still cost tokens, so they are recorded under the
-// admin's name with origin "yardmaster-playground".
+// admin's name with origin playgroundLabel.
 func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request, u *auth.User) {
 	var in struct {
 		Route   string `json:"route"`
@@ -510,7 +522,7 @@ func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request, u *aut
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.Sup.URL()+"/v1/decision", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	requestID := fmt.Sprintf("ym-playground-%d", time.Now().UnixNano())
-	req.Header.Set("X-Switchyard-Origin", "yardmaster-playground")
+	req.Header.Set("X-Switchyard-Origin", playgroundLabel)
 	req.Header.Set("X-Switchyard-Trial-Id", requestID)
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
@@ -521,7 +533,7 @@ func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request, u *aut
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	s.Ledger.AddGateway(usage.GatewayEvent{
-		RequestID: requestID, At: start, UserID: u.ID, UserName: "yardmaster-playground",
+		RequestID: requestID, At: start, UserID: u.ID, UserName: playgroundLabel,
 		TokenName: "playground (" + u.Username + ")", Route: in.Route, Status: resp.StatusCode,
 		LatencyMS: time.Since(start).Milliseconds(),
 	})

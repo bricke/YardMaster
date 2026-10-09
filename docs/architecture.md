@@ -304,5 +304,5 @@ All eight slices are built. Each ended with something that runs in the image.
 - **Tier names.** Switchyard writes an empty tier for the served call, so YardMaster derives it
   from the config: a route's capable/strong target is `strong`, its efficient/weak target is
   `weak`, and single-destination routes have no tier.
-- **`/v1/decision` cost.** Playground calls are tagged with origin `yardmaster-playground` and a
+- **`/v1/decision` cost.** Playground calls are tagged with origin `(playground)` and a
   trial ID, so their judge tokens show up in usage.

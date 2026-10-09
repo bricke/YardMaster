@@ -43,7 +43,7 @@
 <PageHeader title="Playground" subtitle="See which model a route picks for a message, without generating an answer." />
 
 <div class="stack">
-  <div class="alert info">Routes with a judge or classifier still call it here, which costs tokens. These calls are recorded in usage as <code>yardmaster-playground</code>.</div>
+  <div class="alert info">Routes with a judge or classifier still call it here, which costs tokens. These calls are recorded in usage as <code>(playground)</code>.</div>
   <Card>
     <form onsubmit={run} class="stack">
       <label class="field"><span class="label">Route</span>

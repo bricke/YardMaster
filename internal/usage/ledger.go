@@ -182,6 +182,32 @@ func (l *Ledger) writeRecord(ctx context.Context, requestID string, r Record) {
 	}
 }
 
+// RelabelUser moves a deleted user's usage, per-request rows and monthly totals, from
+// their name to label. The history stays readable under the label, and someone given the
+// name later starts with none of it. It runs behind the writes already queued, so their
+// last requests move too; it waits for room in the queue rather than being dropped.
+func (l *Ledger) RelabelUser(name, label string) {
+	l.queue <- func(ctx context.Context) {
+		if err := l.relabel(ctx, name, label); err != nil {
+			slog.Error("relabelling a deleted user's usage", "user", name, "err", err)
+		}
+	}
+}
+
+func (l *Ledger) relabel(ctx context.Context, name, label string) error {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"usage_events", "usage_monthly"} {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET user_name = ? WHERE user_name = ?`, label, name); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Prune folds per-request rows older than the retention period into monthly per-user
 // totals and deletes them.
 func (l *Ledger) Prune(ctx context.Context, days int) error {

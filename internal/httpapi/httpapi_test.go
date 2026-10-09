@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -88,6 +89,41 @@ func TestRolesAreEnforcedByTheAPI(t *testing.T) {
 	}
 	if rec := do(h, "GET", "/api/admin/users", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous: %d", rec.Code)
+	}
+}
+
+func TestDeletedUsersUsageIsntInherited(t *testing.T) {
+	s, h := newServer(t, settings.Settings{})
+	ctx := t.Context()
+	admin, _ := s.Auth.CreateAdmin(ctx, "admin", "correct horse battery")
+	adminCookie, _ := s.Auth.NewSession(ctx, admin.ID)
+	bob, _, _ := s.Auth.CreateUser(ctx, "bob", "")
+	s.Ledger.AddGateway(usage.GatewayEvent{RequestID: "r1", At: time.Now(), UserID: bob.ID, UserName: "bob", Status: 200})
+	if rec := do(h, "DELETE", fmt.Sprintf("/api/admin/users/%d", bob.ID), "", adminCookie); rec.Code != 200 {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	ctxDone, cancel := context.WithCancel(ctx)
+	cancel()
+	s.Ledger.Run(ctxDone) // writes what's queued, then returns
+
+	// A new bob starts with an empty history.
+	newBob, temp, _ := s.Auth.CreateUser(ctx, "bob", "")
+	cookie, _ := s.Auth.NewSession(ctx, newBob.ID)
+	s.Auth.ChangePassword(ctx, newBob.ID, temp, "bob's new password", cookie)
+	rec := do(h, "GET", "/api/me/usage", "", cookie)
+	var mine struct {
+		Summary struct{ Totals struct{ Requests int } }
+		Recent  []any
+		Monthly []any
+	}
+	json.Unmarshal(rec.Body.Bytes(), &mine)
+	if rec.Code != 200 || mine.Summary.Totals.Requests != 0 || len(mine.Recent) != 0 || len(mine.Monthly) != 0 {
+		t.Errorf("the new bob sees the old one's usage: %d %s", rec.Code, rec.Body)
+	}
+	// The admin still sees it, under the deleted user's label.
+	rec = do(h, "GET", "/api/admin/usage", "", adminCookie)
+	if !strings.Contains(rec.Body.String(), `"bob (deleted `) {
+		t.Errorf("the deleted user's usage isn't under their label: %s", rec.Body)
 	}
 }
 
