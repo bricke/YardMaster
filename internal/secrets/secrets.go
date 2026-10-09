@@ -60,8 +60,16 @@ const (
 
 var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 
-// ValidName reports whether name can be used as an environment variable name.
-func ValidName(name string) bool { return envNamePattern.MatchString(name) }
+// reservedPrefix names YardMaster's own settings, among them its secrets (master key,
+// proxy secret, admin password). No provider key can be read from one.
+const reservedPrefix = "YARDMASTER_"
+
+// ValidName reports whether name can hold a provider key: an environment variable name
+// outside YARDMASTER_*. A config naming one of YardMaster's own variables would otherwise
+// hand its value to switchyard-server, which sends it to the provider's base URL.
+func ValidName(name string) bool {
+	return envNamePattern.MatchString(name) && !strings.HasPrefix(name, reservedPrefix)
+}
 
 // Store holds UI-set keys.
 type Store struct {
@@ -164,8 +172,12 @@ func splitPassphraseFile(raw []byte) (salt, sealed []byte, ok bool) {
 // Encrypted reports whether keys are encrypted at rest.
 func (s *Store) Encrypted() bool { return s.aead != nil }
 
-// Status reports where the value for an environment variable name comes from.
+// Status reports where the value for an environment variable name comes from. An invalid
+// name is always missing, so the status never tells whether a reserved variable is set.
 func (s *Store) Status(name string) (string, error) {
+	if !ValidName(name) {
+		return Missing, nil
+	}
 	if v, ok := s.lookup(name); ok && v != "" {
 		return FromEnv, nil
 	}
@@ -185,7 +197,7 @@ func (s *Store) Status(name string) (string, error) {
 // that value takes precedence and the UI treats it as read-only.
 func (s *Store) Set(name, value string) error {
 	if !ValidName(name) {
-		return fmt.Errorf("%q isn't a valid environment variable name", name)
+		return fmt.Errorf("%q can't hold a provider key: use a variable name like OPENROUTER_API_KEY, outside YARDMASTER_*", name)
 	}
 	if value == "" {
 		return errors.New("the key is empty")
@@ -216,7 +228,8 @@ func (s *Store) Delete(name string) error {
 }
 
 // Env returns NAME=value pairs for the given names, for switchyard-server's environment.
-// Container environment values win over UI-set ones. Missing names are left out.
+// Container environment values win over UI-set ones. Missing and invalid names are left
+// out.
 func (s *Store) Env(names []string) ([]string, error) {
 	s.mu.Lock()
 	keys, err := s.load()
@@ -227,6 +240,9 @@ func (s *Store) Env(names []string) ([]string, error) {
 	sort.Strings(names)
 	var out []string
 	for _, name := range names {
+		if !ValidName(name) {
+			continue
+		}
 		if v, ok := s.lookup(name); ok && v != "" {
 			out = append(out, name+"="+v)
 		} else if v := keys[name]; v != "" {

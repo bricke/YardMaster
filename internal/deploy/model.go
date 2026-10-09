@@ -160,7 +160,7 @@ func (d *Deployment) Validate() error {
 		switch c.Auth {
 		case AuthKey:
 			if !secrets.ValidName(c.KeyEnv) {
-				add("provider %q: key variable must look like OPENROUTER_API_KEY", c.Name)
+				add("provider %q: key variable must look like OPENROUTER_API_KEY, outside YARDMASTER_*", c.Name)
 			}
 		case AuthNone:
 		default:
