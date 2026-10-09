@@ -211,9 +211,10 @@ func (s *Service) ProxyUser(ctx context.Context, username, role string) (*User, 
 
 // Login checks a username and password. The caller's IP is used for throttling.
 func (s *Service) Login(ctx context.Context, username, password, ip string) (*User, error) {
-	if !s.throttle.Allow(username, ip) {
+	if !s.throttle.Begin(username, ip) {
 		return nil, ErrThrottled
 	}
+	defer s.throttle.Done(username, ip)
 	u, err := s.UserByName(ctx, username)
 	if errors.Is(err, ErrNotFound) || (err == nil && u.Source != SourceBuiltin) {
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(password))

@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,6 +121,38 @@ func TestLoginThrottle(t *testing.T) {
 	}
 	if _, err := s.Login(ctx, "admin", "correct horse battery", "10.0.0.2"); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("account should be throttled even from another IP, got %v", err)
+	}
+}
+
+func TestParallelGuessesAreThrottled(t *testing.T) {
+	ctx := context.Background()
+	s := New(store.OpenTest(t))
+	s.CreateAdmin(ctx, "admin", "correct horse battery")
+	// All guesses are sent at once, from different addresses, before any has failed.
+	const guesses = 4 * maxFailuresAccount
+	results := make(chan error, guesses)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range guesses {
+		wg.Go(func() {
+			<-start
+			_, err := s.Login(ctx, "admin", "wrong", fmt.Sprintf("10.0.0.%d", i))
+			results <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	checked := 0
+	for err := range results {
+		if errors.Is(err, ErrBadCredentials) {
+			checked++
+		} else if !errors.Is(err, ErrThrottled) {
+			t.Fatalf("unexpected error %v", err)
+		}
+	}
+	if checked != maxFailuresAccount {
+		t.Errorf("%d of %d parallel guesses were checked, want %d", checked, guesses, maxFailuresAccount)
 	}
 }
 

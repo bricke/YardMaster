@@ -10,6 +10,10 @@ import (
 // 15-minute window. Kept in memory: a restart clears it, which is acceptable because a
 // restart is slow compared with the attempts it would allow.
 //
+// Attempts still being checked count against the limits too. A password check takes a
+// quarter of a second, so without that, a burst of parallel guesses would all be allowed
+// before the first of them failed.
+//
 // Memory stays proportional to recent failures: expired entries are swept regularly, and
 // a name that can't be a username counts against the IP only. Unknown but valid names are
 // tracked like real ones, so the throttle doesn't reveal which accounts exist.
@@ -26,20 +30,52 @@ type Throttle struct {
 	ips       map[string][]time.Time
 	lastSweep time.Time
 	now       func() time.Time
+	// Attempts begun and not yet done, per account and per IP.
+	pendingAccounts map[string]int
+	pendingIPs      map[string]int
 }
 
 func NewThrottle() *Throttle {
-	return &Throttle{accounts: map[string][]time.Time{}, ips: map[string][]time.Time{}, now: time.Now}
+	return &Throttle{accounts: map[string][]time.Time{}, ips: map[string][]time.Time{}, now: time.Now,
+		pendingAccounts: map[string]int{}, pendingIPs: map[string]int{}}
 }
 
-// Allow reports whether another attempt is allowed for this account and IP.
-func (t *Throttle) Allow(account, ip string) bool {
+// Begin reports whether another attempt is allowed for this account and IP and, if it
+// is, counts it as in progress until Done. Record a failure with Fail before Done, so
+// the attempt is counted throughout.
+func (t *Throttle) Begin(account, ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if key, ok := accountKey(account); ok && len(t.recent(t.accounts, key)) >= maxFailuresAccount {
+	key, valid := accountKey(account)
+	if valid && len(t.recent(t.accounts, key))+t.pendingAccounts[key] >= maxFailuresAccount {
 		return false
 	}
-	return len(t.recent(t.ips, ip)) < maxFailuresIP
+	if len(t.recent(t.ips, ip))+t.pendingIPs[ip] >= maxFailuresIP {
+		return false
+	}
+	if valid {
+		t.pendingAccounts[key]++
+	}
+	t.pendingIPs[ip]++
+	return true
+}
+
+// Done ends an attempt that Begin allowed.
+func (t *Throttle) Done(account, ip string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if key, ok := accountKey(account); ok {
+		release(t.pendingAccounts, key)
+	}
+	release(t.pendingIPs, ip)
+}
+
+func release(m map[string]int, key string) {
+	if m[key] <= 1 {
+		delete(m, key)
+	} else {
+		m[key]--
+	}
 }
 
 // Fail records a failed attempt.
