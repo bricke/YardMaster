@@ -292,7 +292,8 @@ func TestForwardedHeadersTrustedLikeIdentity(t *testing.T) {
 	req := func(remote string, headers ...string) *http.Request {
 		r := httptest.NewRequest("GET", "http://ym.test/api/session", nil)
 		r.RemoteAddr = remote
-		r.Header.Set("X-Forwarded-For", "192.0.2.7, 10.9.0.5")
+		// The client sent a made-up address; the proxy appended the one it saw.
+		r.Header.Set("X-Forwarded-For", "198.51.100.66, 192.0.2.7")
 		r.Header.Set("X-Forwarded-Proto", "https")
 		for i := 0; i+1 < len(headers); i += 2 {
 			r.Header.Set(headers[i], headers[i+1])
@@ -318,5 +319,28 @@ func TestForwardedHeadersTrustedLikeIdentity(t *testing.T) {
 	}
 	if s.isHTTPS(r) {
 		t.Error("untrusted: forwarded https believed")
+	}
+}
+
+func TestHTTPSStateIsReadOnceAndSaved(t *testing.T) {
+	s, _ := newServer(t, settings.Settings{})
+	ctx := t.Context()
+	s.DB.SetSetting(ctx, settingHTTPS, httpsState{Name: "ym.office.lan"})
+	if st := s.httpsState(ctx); st.Name != "ym.office.lan" {
+		t.Fatalf("not loaded from the database: %+v", st)
+	}
+	// Later reads come from memory, not the database.
+	s.DB.SetSetting(ctx, settingHTTPS, httpsState{Name: "elsewhere.lan"})
+	if st := s.httpsState(ctx); st.Name != "ym.office.lan" {
+		t.Errorf("read again from the database: %+v", st)
+	}
+	// Changes are kept in memory and saved.
+	if err := s.setHTTPSState(ctx, httpsState{Name: "ym.office.lan", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	var saved httpsState
+	s.DB.GetSetting(ctx, settingHTTPS, &saved)
+	if st := s.httpsState(ctx); !st.Confirmed || !saved.Confirmed {
+		t.Errorf("in memory %+v, saved %+v", st, saved)
 	}
 }
