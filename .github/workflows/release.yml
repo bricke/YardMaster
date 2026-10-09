@@ -68,6 +68,18 @@ jobs:
           done
           docker logs ym
           exit 1
+      # On a manual run, keep the tested image for a day, to try it on real hardware:
+      # gh run download <run> -n image-linux-arm64, then docker load < yardmaster-linux-arm64.tar.gz
+      - name: Save the image
+        if: github.event_name == 'workflow_dispatch'
+        run: docker save yardmaster:smoke | gzip > "yardmaster-$PLATFORM_PAIR.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: image-${{ env.PLATFORM_PAIR }}
+          path: yardmaster-${{ env.PLATFORM_PAIR }}.tar.gz
+          compression-level: 0
+          retention-days: 1
       - name: Log in to GHCR
         if: github.event_name == 'release'
         uses: docker/login-action@v3

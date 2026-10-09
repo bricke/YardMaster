@@ -27,7 +27,9 @@ Publish a GitHub release with a tag like `v0.2.0`; the version comes from the ta
 on its own native runner (no emulation), smoke-tests both, and pushes them to
 `ghcr.io/bricke/yardmaster` as one multi-platform image tagged `0.2.0`, `0.2` and `latest` (a
 pre-release such as `v0.3.0-rc.1` gets only its own tag). Running that workflow by hand from the
-Actions tab, on any branch, builds and tests both platforms without pushing.
+Actions tab, on any branch, builds and tests both platforms without pushing, and keeps each image
+for a day as a download, to try on real hardware (`gh run download <run> -n image-linux-arm64`, then
+`docker load < yardmaster-linux-arm64.tar.gz`).
 
 The supervisor tests don't need `switchyard-server`: the test binary stands in for it, and the config
 file's contents tell it how to behave (healthy, crashing, ignoring SIGTERM…). See
