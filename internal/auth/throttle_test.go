@@ -35,7 +35,7 @@ func TestThrottleUnknownNamesLockLikeAccounts(t *testing.T) {
 	for i := range maxFailuresAccount {
 		th.Fail("nobody", fmt.Sprintf("10.0.0.%d", i))
 	}
-	if th.Begin("nobody", "10.1.1.1") {
+	if th.Begin("nobody", "10.1.1.1") != ErrThrottled {
 		t.Error("an unknown username was never throttled")
 	}
 }
@@ -51,10 +51,10 @@ func TestThrottleImpossibleNamesCountAgainstTheIP(t *testing.T) {
 	if len(th.accounts) != 0 {
 		t.Errorf("%d entries kept for names that can't be usernames", len(th.accounts))
 	}
-	if th.Begin("admin", "10.0.0.1") {
+	if th.Begin("admin", "10.0.0.1") != ErrThrottled {
 		t.Error("the IP limit didn't apply")
 	}
-	if !th.Begin("admin", "10.0.0.2") {
+	if th.Begin("admin", "10.0.0.2") != nil {
 		t.Error("another IP was throttled")
 	}
 }
@@ -64,21 +64,21 @@ func TestThrottleCountsAttemptsInProgress(t *testing.T) {
 	fakeClock(th)
 	// Parallel guesses at one account, from many addresses.
 	for i := range maxFailuresAccount {
-		if !th.Begin("admin", fmt.Sprintf("10.0.0.%d", i)) {
+		if th.Begin("admin", fmt.Sprintf("10.0.0.%d", i)) != nil {
 			t.Fatalf("attempt %d refused", i)
 		}
 	}
-	if th.Begin("admin", "10.0.1.1") {
-		t.Error("an attempt beyond the account limit was allowed while the others were still running")
+	if err := th.Begin("admin", "10.0.1.1"); err != ErrBusy {
+		t.Errorf("an attempt beyond the account limit while the others were still running: %v, want ErrBusy", err)
 	}
 	// Parallel guesses from one address, at many accounts.
 	for i := range maxFailuresIP {
-		if !th.Begin(fmt.Sprintf("user%d", i), "10.9.9.9") {
+		if th.Begin(fmt.Sprintf("user%d", i), "10.9.9.9") != nil {
 			t.Fatalf("attempt %d refused", i)
 		}
 	}
-	if th.Begin("someone", "10.9.9.9") {
-		t.Error("an attempt beyond the IP limit was allowed while the others were still running")
+	if err := th.Begin("someone", "10.9.9.9"); err != ErrBusy {
+		t.Errorf("an attempt beyond the IP limit while the others were still running: %v, want ErrBusy", err)
 	}
 	// Attempts that end without failing leave nothing behind, so many people signing in
 	// from one office address are never throttled.
@@ -91,7 +91,7 @@ func TestThrottleCountsAttemptsInProgress(t *testing.T) {
 	if len(th.pendingAccounts) != 0 || len(th.pendingIPs) != 0 {
 		t.Errorf("attempts still counted: %v %v", th.pendingAccounts, th.pendingIPs)
 	}
-	if !th.Begin("admin", "10.9.9.9") {
+	if th.Begin("admin", "10.9.9.9") != nil {
 		t.Error("refused after every attempt ended")
 	}
 }

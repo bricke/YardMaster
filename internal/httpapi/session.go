@@ -23,11 +23,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 		out["first_run"] = !hasAdmin
 	}
-	if u, err := s.currentUser(r); err == nil {
-		out["user"] = u
-	} else {
-		out["user"] = nil
-	}
+	u, err := s.currentUser(r)
+	out["user"] = u
+	// Behind another proxy, someone an admin deactivated here is still signed in there:
+	// tell them, instead of asking them to sign in.
+	out["deactivated"] = errors.Is(err, auth.ErrInactive)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -82,7 +82,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Audit.Record(r.Context(), in.Username, s.clientIP(r), audit.LoginFailed, err.Error())
 		status := http.StatusUnauthorized
-		if errors.Is(err, auth.ErrThrottled) {
+		if errors.Is(err, auth.ErrThrottled) || errors.Is(err, auth.ErrBusy) {
 			status = http.StatusTooManyRequests
 		}
 		writeError(w, status, err.Error())

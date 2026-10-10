@@ -180,7 +180,8 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request, admin 
 		return
 	}
 	// The name can be given to someone else, who mustn't see this person's usage.
-	s.Ledger.RelabelUser(u.Username, deletedLabel(u.Username, time.Now()))
+	now := time.Now()
+	s.Ledger.RelabelUser(u.ID, u.Username, deletedLabel(u.Username, now), now)
 	s.record(r, admin, audit.UserDeleted, u.Username)
 	writeOK(w)
 }

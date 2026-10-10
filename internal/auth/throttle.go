@@ -40,24 +40,31 @@ func NewThrottle() *Throttle {
 		pendingAccounts: map[string]int{}, pendingIPs: map[string]int{}}
 }
 
-// Begin reports whether another attempt is allowed for this account and IP and, if it
-// is, counts it as in progress until Done. Record a failure with Fail before Done, so
-// the attempt is counted throughout.
-func (t *Throttle) Begin(account, ip string) bool {
+// Begin starts an attempt for this account and IP and counts it as in progress until
+// Done, or refuses it: ErrThrottled after too many failures, ErrBusy when the limit is
+// reached only because other attempts are still being checked. Record a failure with Fail
+// before Done, so the attempt is counted throughout.
+func (t *Throttle) Begin(account, ip string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key, valid := accountKey(account)
-	if valid && len(t.recent(t.accounts, key))+t.pendingAccounts[key] >= maxFailuresAccount {
-		return false
+	var accountFailures int
+	if valid {
+		accountFailures = len(t.recent(t.accounts, key))
 	}
-	if len(t.recent(t.ips, ip))+t.pendingIPs[ip] >= maxFailuresIP {
-		return false
+	ipFailures := len(t.recent(t.ips, ip))
+	if accountFailures >= maxFailuresAccount || ipFailures >= maxFailuresIP {
+		return ErrThrottled
+	}
+	if valid && accountFailures+t.pendingAccounts[key] >= maxFailuresAccount ||
+		ipFailures+t.pendingIPs[ip] >= maxFailuresIP {
+		return ErrBusy
 	}
 	if valid {
 		t.pendingAccounts[key]++
 	}
 	t.pendingIPs[ip]++
-	return true
+	return nil
 }
 
 // Done ends an attempt that Begin allowed.

@@ -7,6 +7,7 @@ export const session = $state({
   user: null,
   authMode: 'builtin',
   firstRun: false,
+  deactivated: false,
   version: '',
   switchyardVersion: '',
 })
@@ -16,6 +17,7 @@ export async function loadSession() {
   session.user = s.user
   session.authMode = s.auth_mode
   session.firstRun = !!s.first_run
+  session.deactivated = !!s.deactivated
   session.version = s.version
   session.switchyardVersion = s.switchyard_version
   session.loaded = true
