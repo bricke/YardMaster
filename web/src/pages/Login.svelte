@@ -22,7 +22,9 @@
   }
 </script>
 
-{#if session.authMode === 'proxy'}
+{#if session.authMode === 'proxy' && session.deactivated}
+  <AuthCard title="Your account is deactivated" subtitle="You're signed in through your portal, but a YardMaster admin has turned off your access. Ask them to reactivate it." />
+{:else if session.authMode === 'proxy'}
   <AuthCard title="Sign in through your portal" subtitle="YardMaster is behind another proxy. Open it through that portal to sign in." />
 {:else}
   <AuthCard title="Sign in">

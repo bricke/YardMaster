@@ -152,15 +152,21 @@ func TestRelabelUserMovesAllTheirUsage(t *testing.T) {
 	if err := l.Prune(ctx, 90); err != nil {
 		t.Fatal(err)
 	}
-	l.RelabelUser("bob", "bob (deleted)")
+	deletedAt := time.Now()
+	l.RelabelUser(7, "bob", "bob (deleted)", deletedAt)
+	drain(l)
+	// A request bob started before the deletion finishes after it; a new bob, given the
+	// same name and, as SQLite may, the same ID, starts one after it.
+	l.AddGateway(GatewayEvent{RequestID: "in-flight", At: deletedAt.Add(-time.Minute), UserID: 7, UserName: "bob", Status: 200})
+	l.AddGateway(GatewayEvent{RequestID: "new-bob", At: deletedAt.Add(time.Second), UserID: 7, UserName: "bob", Status: 200})
 	drain(l)
 
 	// Someone given the name later sees none of it, neither recent nor monthly.
-	if s, _ := l.Summarize(ctx, Filter{Days: 30, UserName: "bob"}); s.Totals.Requests != 0 {
-		t.Errorf("%d requests still under the name", s.Totals.Requests)
+	if rows, _ := l.Recent(ctx, Filter{Days: 30, UserName: "bob"}, false, 10); len(rows) != 1 || rows[0].RequestID != "new-bob" {
+		t.Errorf("under the name: %+v, want only the new bob's request", rows)
 	}
-	if m, _ := l.Monthly(ctx, "bob"); len(m) != 0 {
-		t.Errorf("monthly totals still under the name: %+v", m)
+	if m, _ := l.Monthly(ctx, "bob"); len(m) != 1 || m[0].Requests != 1 {
+		t.Errorf("monthly totals under the name: %+v, want only the new bob's request", m)
 	}
 	// The history stays readable under the label, and nobody else's moves.
 	var total int64
@@ -168,8 +174,8 @@ func TestRelabelUserMovesAllTheirUsage(t *testing.T) {
 	for _, row := range m {
 		total += row.Requests
 	}
-	if total != 2 {
-		t.Errorf("%d requests under the label, want 2", total)
+	if total != 3 {
+		t.Errorf("%d requests under the label, want 3", total)
 	}
 	if s, _ := l.Summarize(ctx, Filter{Days: 30, UserName: "bobby"}); s.Totals.Requests != 1 {
 		t.Errorf("another user's usage moved: %d left", s.Totals.Requests)

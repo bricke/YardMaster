@@ -59,10 +59,22 @@ type Ledger struct {
 	prices *Prices
 	config func() *deploy.Parsed
 	queue  chan func(context.Context)
+	// Users deleted recently, by ID, so requests they started before the deletion and
+	// that finish after it are filed under their label too. Only the writer touches it.
+	deleted map[int64]deletion
 }
 
+type deletion struct {
+	label string
+	at    time.Time
+}
+
+// keepDeleted is how long a deletion is remembered: longer than any request runs.
+const keepDeleted = time.Hour
+
 func NewLedger(db *store.DB, prices *Prices, config func() *deploy.Parsed) *Ledger {
-	return &Ledger{db: db, prices: prices, config: config, queue: make(chan func(context.Context), 4096)}
+	return &Ledger{db: db, prices: prices, config: config, queue: make(chan func(context.Context), 4096),
+		deleted: map[int64]deletion{}}
 }
 
 // Run writes queued rows until ctx ends, then drains what's left.
@@ -103,6 +115,11 @@ func (l *Ledger) AddGateway(e GatewayEvent) {
 		}
 		if e.TokenID != 0 {
 			tokenID = e.TokenID
+		}
+		// A request started before its user was deleted is theirs, not a later user's who
+		// was given the same name or ID.
+		if d, ok := l.deleted[e.UserID]; ok && e.At.Before(d.at) {
+			e.UserName = d.label
 		}
 		_, err := l.db.ExecContext(ctx,
 			`INSERT INTO usage_events (request_id, created_at, user_id, user_name, token_id, token_name,
@@ -182,12 +199,20 @@ func (l *Ledger) writeRecord(ctx context.Context, requestID string, r Record) {
 	}
 }
 
-// RelabelUser moves a deleted user's usage, per-request rows and monthly totals, from
-// their name to label. The history stays readable under the label, and someone given the
-// name later starts with none of it. It runs behind the writes already queued, so their
-// last requests move too; it waits for room in the queue rather than being dropped.
-func (l *Ledger) RelabelUser(name, label string) {
+// RelabelUser moves the usage of a user deleted at the given time, per-request rows and
+// monthly totals, from their name to label. The history stays readable under the label,
+// and someone given the name later starts with none of it. It runs behind the writes
+// already queued, so their last requests move too, and requests of theirs still running
+// are filed under the label when they finish. It waits for room in the queue rather than
+// being dropped.
+func (l *Ledger) RelabelUser(userID int64, name, label string, at time.Time) {
 	l.queue <- func(ctx context.Context) {
+		for id, d := range l.deleted {
+			if time.Since(d.at) > keepDeleted {
+				delete(l.deleted, id)
+			}
+		}
+		l.deleted[userID] = deletion{label: label, at: at}
 		if err := l.relabel(ctx, name, label); err != nil {
 			slog.Error("relabelling a deleted user's usage", "user", name, "err", err)
 		}

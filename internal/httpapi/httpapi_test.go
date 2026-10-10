@@ -278,6 +278,16 @@ func TestDeactivatedProxyUserIsShutOut(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "deactivated") {
 		t.Errorf("UI after deactivation: %d %s", rec.Code, rec.Body)
 	}
+	// The app tells them, instead of asking them to sign in through the portal.
+	rec = do(h, "GET", "/api/session", "", "", as("dave", "staff")...)
+	var session struct {
+		User        *auth.User
+		Deactivated bool
+	}
+	json.Unmarshal(rec.Body.Bytes(), &session)
+	if session.User != nil || !session.Deactivated {
+		t.Errorf("session after deactivation: %s", rec.Body)
+	}
 	if rec := do(h, "POST", "/v1/chat/completions", `{"model":"x"}`, "", as("dave", "staff")...); rec.Code != http.StatusUnauthorized ||
 		!strings.Contains(rec.Body.String(), "deactivated") {
 		t.Errorf("gateway after deactivation: %d %s", rec.Code, rec.Body)

@@ -43,6 +43,7 @@ const (
 var (
 	ErrBadCredentials = errors.New("wrong username or password")
 	ErrThrottled      = errors.New("too many failed logins, try again later")
+	ErrBusy           = errors.New("too many sign-ins at once from your network, try again in a moment")
 	ErrInactive       = errors.New("this account is deactivated")
 	ErrTempExpired    = errors.New("the temporary password has expired, ask the admin for a new one")
 	ErrNotFound       = errors.New("not found")
@@ -222,8 +223,8 @@ func (s *Service) ProxyUser(ctx context.Context, username, role string) (*User, 
 
 // Login checks a username and password. The caller's IP is used for throttling.
 func (s *Service) Login(ctx context.Context, username, password, ip string) (*User, error) {
-	if !s.throttle.Begin(username, ip) {
-		return nil, ErrThrottled
+	if err := s.throttle.Begin(username, ip); err != nil {
+		return nil, err
 	}
 	defer s.throttle.Done(username, ip)
 	u, err := s.UserByName(ctx, username)

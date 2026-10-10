@@ -147,7 +147,7 @@ func TestParallelGuessesAreThrottled(t *testing.T) {
 	for err := range results {
 		if errors.Is(err, ErrBadCredentials) {
 			checked++
-		} else if !errors.Is(err, ErrThrottled) {
+		} else if !errors.Is(err, ErrBusy) && !errors.Is(err, ErrThrottled) {
 			t.Fatalf("unexpected error %v", err)
 		}
 	}
