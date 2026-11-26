@@ -220,6 +220,7 @@ internal/
   settings/            env vars into one typed struct
   store/               SQLite open, embedded SQL migrations, small query helpers
   fsutil/              atomic file writes, shared by the packages that keep files in /data
+  httpx/               HTTP helpers shared by the API and the gateway: request-body deadlines
   auth/                passwords, sessions, tokens, throttling, trusted-proxy identity
   audit/               the one function every action calls
   secrets/             provider keys: env precedence, file storage, encryption

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -128,6 +129,7 @@ func TestBodyReadErrors(t *testing.T) {
 		{"over the limit", io.LimitReader(zeros{}, maxBody+1), 413, 413, "request_too_large"},
 		{"client went away", &failingBody{err: io.ErrUnexpectedEOF}, 400, 499, "invalid_request_error"},
 		{"broken body", &failingBody{err: errors.New("malformed chunked encoding")}, 400, 400, "invalid_request_error"},
+		{"too slow", &failingBody{err: os.ErrDeadlineExceeded}, 408, 408, "invalid_request_error"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/v1/messages", c.body)

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"yardmaster/internal/auth"
+	"yardmaster/internal/httpx"
 	"yardmaster/internal/usage"
 )
 
@@ -37,7 +38,12 @@ var routedPaths = map[string]bool{
 	"/v1/responses/compact":      true,
 }
 
-const maxBody = 32 << 20 // coding agents send whole files
+const (
+	maxBody = 32 << 20 // coding agents send whole files
+	// BodyTimeout is how long a caller has to send the body: 32 MB at about 110 KB/s.
+	// Streamed answers aren't limited; only the upload is.
+	BodyTimeout = 5 * time.Minute
+)
 
 // Credentials are never forwarded to Switchyard: they belong to YardMaster, and would
 // otherwise reach providers through forward_auth or fallback_client.
@@ -158,14 +164,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // readError answers a request whose body couldn't be read, and returns the status and
-// error for its ledger row. Only a body over the limit is "too large"; a body cut off
-// part-way means the client went away.
+// error for its ledger row. Only a body over the limit is "too large", and only one that
+// stalled is "too slow"; a body cut off part-way means the client went away.
 func readError(w http.ResponseWriter, r *http.Request, err error) (int, string) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, r, http.StatusRequestEntityTooLarge, "request_too_large",
 			fmt.Sprintf("Requests are limited to %d MB.", maxBody>>20))
 		return http.StatusRequestEntityTooLarge, http.StatusText(http.StatusRequestEntityTooLarge)
+	}
+	if httpx.TimedOut(err) {
+		writeError(w, r, http.StatusRequestTimeout, "request_timeout",
+			fmt.Sprintf("The request body took longer than %d minutes to arrive.", BodyTimeout/time.Minute))
+		return http.StatusRequestTimeout, "the request body took too long to arrive"
 	}
 	writeError(w, r, http.StatusBadRequest, "invalid_request_error", "The request body couldn't be read.")
 	if r.Context().Err() != nil || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -261,7 +272,7 @@ func anthropicType(code string) string {
 		return "authentication_error"
 	case "not_found":
 		return "not_found_error"
-	case "invalid_request_error":
+	case "invalid_request_error", "request_timeout":
 		return "invalid_request_error"
 	case "request_too_large":
 		return "request_too_large"

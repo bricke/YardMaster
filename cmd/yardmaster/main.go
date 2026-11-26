@@ -158,26 +158,11 @@ func serve() error {
 	}
 	run(sup.Run)
 
-	handler := srv.Handler()
-	plain := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.HTTPPort),
-		Handler:           srv.PlainHandler(handler),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	secure := &https{
-		srv: &http.Server{
-			Addr:              ":" + strconv.Itoa(cfg.HTTPSPort),
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			TLSConfig:         &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12},
-		},
-	}
+	plain := newServer(":"+strconv.Itoa(cfg.HTTPPort), srv.PlainHandler())
+	secure := &https{srv: newServer(":"+strconv.Itoa(cfg.HTTPSPort), srv.Handler())}
+	secure.srv.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
 	// The Jev judge adapter: loopback only, since only switchyard-server calls it.
-	judge := &http.Server{
-		Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.JudgePort)),
-		Handler:           jev.New(cfg.TypeSafeURL),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	judge := newServer(net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.JudgePort)), jev.New(cfg.TypeSafeURL))
 	go func() {
 		if err := judge.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Jev judge adapter stopped", "addr", judge.Addr, "err", err)
@@ -217,6 +202,19 @@ func serve() error {
 	// After the router has stopped: its draining requests may still need a judge.
 	judge.Shutdown(shutdownCtx)
 	return nil
+}
+
+// newServer sets the timeouts every listener shares. Headers must arrive within 10 s and
+// an idle keep-alive connection is closed after 2 minutes. There is deliberately no
+// ReadTimeout or WriteTimeout: gateway uploads can be 32 MB and streamed answers run for
+// minutes. Request bodies get their own deadline instead (httpx.BodyDeadline).
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 // https runs the HTTPS listener once, when HTTPS becomes active.

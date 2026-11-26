@@ -15,6 +15,7 @@ import (
 	"yardmaster/internal/audit"
 	"yardmaster/internal/auth"
 	"yardmaster/internal/deploy"
+	"yardmaster/internal/gateway"
 	"yardmaster/internal/metrics"
 	"yardmaster/internal/secrets"
 	"yardmaster/internal/settings"
@@ -352,5 +353,19 @@ func TestHTTPSStateIsReadOnceAndSaved(t *testing.T) {
 	s.DB.GetSetting(ctx, settingHTTPS, &saved)
 	if st := s.httpsState(ctx); !st.Confirmed || !saved.Confirmed {
 		t.Errorf("in memory %+v, saved %+v", st, saved)
+	}
+}
+
+func TestBodyTimeouts(t *testing.T) {
+	for path, want := range map[string]time.Duration{
+		"/api/login":      apiBodyTimeout,
+		"/api/admin/x":    apiBodyTimeout,
+		"/v1/messages":    gateway.BodyTimeout,
+		"/v1/chat/x":      gateway.BodyTimeout,
+		"/somewhere/else": apiBodyTimeout,
+	} {
+		if got := bodyTimeout(httptest.NewRequest("POST", path, nil)); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
 	}
 }
