@@ -23,7 +23,7 @@ const tempPrefix = ".yardmaster-tmp-"
 // not survive a crash: afterwards path may hold the old file, or be missing if it didn't
 // exist before. Never a partial file.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
-	// Opened first, so a directory that can't be synced stops the write before the rename.
+	// Opened first, so a directory that can't be opened stops the write before the rename.
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
