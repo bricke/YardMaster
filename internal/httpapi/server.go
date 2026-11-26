@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -394,12 +395,21 @@ func writeApplyError(w http.ResponseWriter, err error) bool {
 
 // readJSON decodes a small JSON body into v.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAPIBody)).Decode(v)
+	// The whole body first, to its end: the decoder alone stops after the first JSON value,
+	// so the handler could act before the upload finished, and the size limit and the
+	// body deadline would only cover the bytes it happened to read.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAPIBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(body)).Decode(v)
+	}
+	var tooLarge *http.MaxBytesError
 	switch {
-	case err == nil, errors.Is(err, io.EOF):
+	case err == nil, errors.Is(err, io.EOF): // io.EOF: no body, which is fine
 		return true
 	case httpx.TimedOut(err):
 		writeError(w, http.StatusRequestTimeout, "the request body took too long to arrive")
+	case errors.As(err, &tooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
 	default:
 		writeError(w, http.StatusBadRequest, "the request body isn't valid JSON")
 	}
