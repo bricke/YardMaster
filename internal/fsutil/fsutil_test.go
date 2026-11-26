@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -120,4 +121,15 @@ func TestWriteFileAtomicUnopenableDirChangesNothing(t *testing.T) {
 		t.Errorf("content = %q, want the old file", got)
 	}
 	assertOnly(t, dir, "config.toml")
+}
+
+// The temporary name doesn't grow with the target's, so the longest name a file system
+// allows still works.
+func TestWriteFileAtomicLongName(t *testing.T) {
+	dir := t.TempDir()
+	name := strings.Repeat("n", 250)
+	if err := WriteFileAtomic(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertOnly(t, dir, name)
 }
