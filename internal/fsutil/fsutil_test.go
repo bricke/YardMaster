@@ -93,3 +93,31 @@ func assertOnly(t *testing.T, dir string, names ...string) {
 		t.Fatalf("dir holds %v, want %v", got, names)
 	}
 }
+
+// A directory that can't be opened for syncing must stop the write before the rename, so
+// the old file stays in place and an error always means nothing changed.
+func TestWriteFileAtomicUnopenableDirChangesNothing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Write and search, but no read: files can be created in it, the directory can't be opened.
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteFileAtomic(path, []byte("new"), 0o600)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err == nil {
+		t.Fatal("want an error when the directory can't be opened")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "old" {
+		t.Errorf("content = %q, want the old file", got)
+	}
+	assertOnly(t, dir, "config.toml")
+}

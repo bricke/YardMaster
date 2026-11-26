@@ -2,6 +2,7 @@
 package fsutil
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -11,9 +12,19 @@ import (
 // a file behind. Each call uses its own temporary file, so concurrent writers to the same
 // path never interleave: the last rename wins. The file gets exactly perm, whatever the
 // umask.
+//
+// An error means path was left as it was. Once the rename has happened, path holds the
+// complete new data and WriteFileAtomic succeeds: if the directory sync then fails, it is
+// logged, since at worst a crash brings back the complete old file. Callers such as a
+// config apply can rely on that: on an error there is nothing to roll back.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	// Opened first, so a directory that can't be synced stops the write before the rename.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	f, err := os.CreateTemp(dir.Name(), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -38,15 +49,8 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if err = os.Rename(f.Name(), path); err != nil {
 		return err
 	}
-	return syncDir(dir)
-}
-
-// syncDir makes a rename in dir durable.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
+	if serr := dir.Sync(); serr != nil {
+		slog.Warn("file replaced, but syncing its directory failed", "path", path, "err", serr)
 	}
-	defer d.Close()
-	return d.Sync()
+	return nil
 }

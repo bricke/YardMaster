@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"yardmaster/internal/secrets"
+	"yardmaster/internal/store"
+	"yardmaster/internal/supervisor"
 )
 
 func f(v float64) *float64 { return &v }
@@ -249,5 +252,53 @@ api_key_env = "YARDMASTER_SECRET_KEY"
 	}
 	if !strings.Contains(p.Errors, `"YARDMASTER_SECRET_KEY" can't hold a provider key`) {
 		t.Errorf("raw TOML: errors %q", p.Errors)
+	}
+}
+
+// When writing the candidate fails, Apply reports it and the config on disk, which every
+// later restart reads, is still the running one.
+func TestFailedWriteKeepsTheRunningConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "switchyard")
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("# running\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "sk-test")
+	keys, err := secrets.Open(filepath.Join(dir, "secrets"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "true" accepts any config in --dry-run, so Apply gets as far as writing it.
+	sup := supervisor.New(supervisor.Options{Bin: "true", ConfigPath: configPath, Port: 1, ShutdownTimeout: time.Second,
+		Env: func(string) ([]string, error) { return nil, nil }})
+	a, err := NewApplier(store.OpenTest(t), sup, keys, configPath, filepath.Join(dir, "history"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := sample().TOML()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Files can still be created in the directory, but it can't be opened to sync the rename.
+	if err := os.Chmod(configDir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	err = a.Apply(t.Context(), candidate, "toml", nil)
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err == nil {
+		t.Fatal("want Apply to fail")
+	}
+	if got, _ := a.Current(); got != "# running\n" {
+		t.Errorf("config on disk after a failed apply:\n%s", got)
 	}
 }
