@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -20,11 +21,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"yardmaster/internal/audit"
 	"yardmaster/internal/auth"
 	"yardmaster/internal/deploy"
 	"yardmaster/internal/gateway"
+	"yardmaster/internal/httpx"
 	"yardmaster/internal/metrics"
 	"yardmaster/internal/secrets"
 	"yardmaster/internal/settings"
@@ -90,8 +93,26 @@ func (s *Server) SetSetupCode(code string) {
 	s.setupMu.Unlock()
 }
 
+// Limits on /api request bodies. The gateway allows larger, slower uploads.
+const (
+	maxAPIBody     = 1 << 20
+	apiBodyTimeout = 30 * time.Second
+)
+
+// bodyTimeout is how long a request's body may take to arrive (see httpx.BodyDeadline).
+func bodyTimeout(r *http.Request) time.Duration {
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		return gateway.BodyTimeout
+	}
+	return apiBodyTimeout
+}
+
 // Handler is the full application: UI, API and gateway.
 func (s *Server) Handler() http.Handler {
+	return httpx.BodyDeadline(s.app(), bodyTimeout)
+}
+
+func (s *Server) app() http.Handler {
 	mux := http.NewServeMux()
 
 	// Open endpoints.
@@ -162,8 +183,9 @@ func (s *Server) Handler() http.Handler {
 // it is, 8080 only helps people move to HTTPS: the setup page, the CA certificate and the
 // name check. Gateway and API requests get an error, never a redirect, because clients
 // drop credentials on a redirect and the token has already crossed the network in clear.
-func (s *Server) PlainHandler(full http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) PlainHandler() http.Handler {
+	full := s.app()
+	return httpx.BodyDeadline(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		active, name := s.httpsActive(r.Context())
 		if !active {
 			full.ServeHTTP(w, r)
@@ -180,7 +202,7 @@ func (s *Server) PlainHandler(full http.Handler) http.Handler {
 		default:
 			http.Redirect(w, r, "/setup", http.StatusFound)
 		}
-	})
+	}), bodyTimeout)
 }
 
 // ---- identity ----
@@ -373,12 +395,25 @@ func writeApplyError(w http.ResponseWriter, err error) bool {
 
 // readJSON decodes a small JSON body into v.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "the request body isn't valid JSON")
-		return false
+	// The whole body first, to its end: the decoder alone stops after the first JSON value,
+	// so the handler could act before the upload finished, and the size limit and the
+	// body deadline would only cover the bytes it happened to read.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAPIBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(body)).Decode(v)
 	}
-	return true
+	var tooLarge *http.MaxBytesError
+	switch {
+	case err == nil, errors.Is(err, io.EOF): // io.EOF: no body, which is fine
+		return true
+	case httpx.TimedOut(err):
+		writeError(w, http.StatusRequestTimeout, "the request body took too long to arrive")
+	case errors.As(err, &tooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
+	default:
+		writeError(w, http.StatusBadRequest, "the request body isn't valid JSON")
+	}
+	return false
 }
 
 // pathID reads the {id} in the URL, or answers 400 naming what kind of id it expected.

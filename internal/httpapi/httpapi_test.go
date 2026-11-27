@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -15,6 +17,8 @@ import (
 	"yardmaster/internal/audit"
 	"yardmaster/internal/auth"
 	"yardmaster/internal/deploy"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/httpx"
 	"yardmaster/internal/metrics"
 	"yardmaster/internal/secrets"
 	"yardmaster/internal/settings"
@@ -352,5 +356,82 @@ func TestHTTPSStateIsReadOnceAndSaved(t *testing.T) {
 	s.DB.GetSetting(ctx, settingHTTPS, &saved)
 	if st := s.httpsState(ctx); !st.Confirmed || !saved.Confirmed {
 		t.Errorf("in memory %+v, saved %+v", st, saved)
+	}
+}
+
+func TestBodyTimeouts(t *testing.T) {
+	for path, want := range map[string]time.Duration{
+		"/api/login":      apiBodyTimeout,
+		"/api/admin/x":    apiBodyTimeout,
+		"/v1/messages":    gateway.BodyTimeout,
+		"/v1/chat/x":      gateway.BodyTimeout,
+		"/somewhere/else": apiBodyTimeout,
+	} {
+		if got := bodyTimeout(httptest.NewRequest("POST", path, nil)); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
+	}
+}
+
+// readJSON must read the body to the end before a handler acts on it: a complete JSON
+// value followed by a stalled remainder gets 408, not whatever the handler would answer.
+// And the size limit counts every byte, not just the ones the JSON decoder needed.
+func TestReadJSONReadsTheWholeBody(t *testing.T) {
+	acted := make(chan struct{}, 1)
+	h := httpx.BodyDeadline(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v struct{ Name string }
+		if !readJSON(w, r, &v) {
+			return
+		}
+		select { // recorded without blocking: only the unfinished bodies are checked
+		case acted <- struct{}{}:
+		default:
+		}
+		writeOK(w)
+	}), func(*http.Request) time.Duration { return 200 * time.Millisecond })
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	send := func(contentLength int, body string) string {
+		t.Helper()
+		conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: %d\r\n\r\n%s", contentLength, body)
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		status, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatalf("no response: %v", err)
+		}
+		return strings.TrimSpace(status)
+	}
+	noAction := func(name string) {
+		t.Helper()
+		select {
+		case <-acted:
+			t.Errorf("%s: the handler acted on an unfinished body", name)
+		default:
+		}
+	}
+
+	value := `{"name":"alice"}`
+	if got := send(len(value)+10, value); got != "HTTP/1.1 408 Request Timeout" {
+		t.Errorf("stalled after a complete value: %q, want 408", got)
+	}
+	noAction("stalled")
+
+	padded := value + strings.Repeat(" ", maxAPIBody)
+	if got := send(len(padded), padded); got != "HTTP/1.1 413 Request Entity Too Large" {
+		t.Errorf("over the limit after a complete value: %q, want 413", got)
+	}
+	noAction("over the limit")
+
+	if got := send(len(value), value); got != "HTTP/1.1 200 OK" {
+		t.Errorf("complete body: %q, want 200", got)
+	}
+	if got := send(0, ""); got != "HTTP/1.1 200 OK" {
+		t.Errorf("empty body: %q, want 200", got)
 	}
 }
